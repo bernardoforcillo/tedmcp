@@ -1,0 +1,37 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/tedmcp ."
+  entrypoint = ["./tmp/tedmcp"]
+
+  # HTTP, not stdio: a live-reloading server has to outlive its client, and a
+  # stdio server is owned by whoever launched it. Over HTTP the MCP client just
+  # reconnects to the same URL after each rebuild.
+  args_bin = ["-http", "127.0.0.1:8080"]
+
+  include_ext = ["go", "mod", "sum"]
+
+  # .tenders holds the notice cache: every scan writes files there, and watching
+  # it would rebuild the server in a loop while it works.
+  exclude_dir = ["tmp", ".tenders", ".git", ".claude", "scratchpad"]
+  exclude_regex = ["_test\\.go"]
+  exclude_unchanged = true
+
+  delay = 300
+  stop_on_error = true
+
+  # The server shuts down gracefully on SIGINT, so let it: in-flight MCP
+  # sessions get a moment to close instead of being cut mid-response.
+  send_interrupt = true
+  kill_delay = "2s"
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true

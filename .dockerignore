@@ -1,0 +1,14 @@
+# The compiled binary and the notice cache are the two big things in this
+# directory; neither belongs in a build context.
+tedmcp
+.tenders/
+tmp/
+
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+
+.claude/
+.mcp.json
+*.test

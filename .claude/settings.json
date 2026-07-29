@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__tedmcp__scan_tenders",
+      "mcp__tedmcp__get_tender_document",
+      "Bash(python3 -)"
+    ]
+  }
+}

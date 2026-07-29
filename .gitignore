@@ -1,0 +1,38 @@
+# Build output. Anchored, so a package directory that happens to share the
+# binary's name is not ignored along with it.
+/tedmcp
+*.exe
+
+# air's working directory (tmp_dir in .air.toml): rebuilt binaries and logs.
+/tmp/
+
+# Downloaded TED notices. Regenerable by definition — a notice is immutable, so
+# anything missing is simply fetched again — and a full scan runs to tens of MB.
+/.tenders/
+
+# Go test and profiling artifacts.
+*.test
+*.out
+*.prof
+go.work
+go.work.sum
+
+# ANAC bulk snapshots for lookup_anac: ~57 MB each, downloaded by hand from
+# dati.anticorruzione.it and not something to carry in the repository.
+/*.zip
+
+# Claude Code keeps shared project settings in .claude/settings.json, which is
+# worth committing, and personal overrides in settings.local.json, which is not.
+.claude/settings.local.json
+
+# Local environment. Commit an .env.example instead if one is ever needed.
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise.
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
