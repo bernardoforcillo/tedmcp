@@ -6,7 +6,7 @@ metadata:
 spec:
   secretName: tedmcp-tls
   issuerRef:
-    name: letsencrypt-prod
+    name: cluster-issuer
     kind: ClusterIssuer
   dnsNames:
     # TODO: replace with the actual public hostname for this service.
