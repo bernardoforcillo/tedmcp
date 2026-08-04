@@ -36,7 +36,7 @@ COPY --from=build --chown=65532:65532 /out/cache /var/cache/tedmcp
 
 # The AGPL is conveyed with the program, so the licence travels inside the
 # image rather than being left behind in the repository.
-COPY --from=build /src/LICENSE /usr/local/share/tedmcp/LICENSE
+COPY --from=build /src/LICENSE /usr/local/share/tedmcp/license.md
 
 # TED notices never change once published, so this cache is worth keeping
 # across restarts: a cold scan of a few hundred notices takes minutes, a warm
