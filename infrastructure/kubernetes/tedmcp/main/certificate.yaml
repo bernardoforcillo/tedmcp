@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tedmcp-tls
+  namespace: tedmcp
+spec:
+  secretName: tedmcp-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    # TODO: replace with the actual public hostname for this service.
+    - ted.mcp.bernardoforcillo.com

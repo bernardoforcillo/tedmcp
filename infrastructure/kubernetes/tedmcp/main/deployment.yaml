@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tedmcp
+  namespace: tedmcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tedmcp
+  template:
+    metadata:
+      labels:
+        app: tedmcp
+    spec:
+      securityContext:
+        # gcr.io/distroless/static-debian12:nonroot is UID/GID 65532.
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tedmcp
+          # Image published by .github/workflows/ci.yml; tag rewritten by
+          # Flux image automation (see update.yaml).
+          image: bernardoforcillo/tedmcp:latest # {"$imagepolicy": "tedmcp:tedmcp-image-policy"}
+          args: ["-http", ":8080", "-cache-dir", "/var/cache/tedmcp"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+            requests:
+              memory: "64Mi"
+              cpu: "25m"
+          ports:
+            - containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: cache
+              mountPath: /var/cache/tedmcp
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: tedmcp-cache

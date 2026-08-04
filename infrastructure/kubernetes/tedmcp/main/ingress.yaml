@@ -1,0 +1,18 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: tedmcp-ingress
+  namespace: tedmcp
+spec:
+  entryPoints:
+    - web
+    - websecure
+  routes:
+    # TODO: replace with the actual public hostname.
+    - match: Host(`ted.mcp.bernardoforcillo.com`)
+      kind: Rule
+      services:
+        - name: tedmcp-svc
+          port: 8080
+  tls:
+    secretName: tedmcp-tls
