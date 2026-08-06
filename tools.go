@@ -47,11 +47,27 @@ func registerTools(s *mcp.Server, tc *ted.Client, wc *webdoc.Client) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "fetch_tender_documents",
-		Description: "Try to download the tender documents (capitolato, disciplinare) from the buyer's own portal, which is where they live — " +
-			"TED carries only the notice. Obeys each site's robots.txt and reports honestly when a document cannot be retrieved: most Italian " +
-			"procurement portals disallow automated clients and put the procedure page behind a captcha, in which case this returns the URL to " +
-			"open manually rather than pretending nothing is there. Never treat a robots-denied or captcha result as 'no documents exist'.",
+		Description: "Download ALL of a tender's documents from the buyer's own portal, which is where they live — TED carries only the notice. " +
+			"The notice links to a procedure page, not to a file; this follows that page one hop to the capitolato, the disciplinare and the " +
+			"allegati it lists, retrieves them, and returns their text. It reads PDF, DOCX, XLSX, PPTX, OpenDocument, HTML and plain text, " +
+			"expands ZIP archives into their members, and opens .p7m digital-signature envelopes to the document inside. " +
+			"Obeys each site's robots.txt and reports honestly when a document cannot be retrieved: most Italian procurement portals disallow " +
+			"automated clients and put the procedure page behind a captcha, in which case this returns the URL to open manually rather than " +
+			"pretending nothing is there. Never treat a robots-denied or captcha result as 'no documents exist'. A PDF reported as " +
+			"no-text-layer is a scan of paper: the document is real and needs OCR or a human reader, so never report it as empty.",
 	}, handleFetchDocuments(tc, wc))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "scan_tender_documents",
+		Description: "Search INSIDE a tender's own documents — the capitolato and the disciplinare, not just the notice. Use this when scan_tenders " +
+			"finds nothing but the requirement could still be in the tender documents, which is where most scoring criteria, technical " +
+			"specifications and contract clauses actually live. Give it publication_numbers (or urls) plus the same terms, terms_by_language, " +
+			"near or regex as scan_tenders; it downloads each tender's documents, extracts their text and reports the matching passages with the " +
+			"file each came from. Terms are matched against the language the notice declares, so one language's word stem is never tested against " +
+			"another's text. Downloading a tender's documents is many requests to a small server, so it searches a few tenders per call, not a page " +
+			"of them: use scan_tenders to narrow the field first, then this on the survivors. Read the not-searched lists before concluding " +
+			"anything from a nil result: a document behind a captcha and a document that says nothing look identical in a count.",
+	}, handleScanDocuments(tc, wc))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "lookup_anac",
@@ -359,7 +375,7 @@ type ScanOutput struct {
 
 func handleScan(tc *ted.Client) func(context.Context, *mcp.CallToolRequest, ScanInput) (*mcp.CallToolResult, ScanOutput, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ScanInput) (*mcp.CallToolResult, ScanOutput, error) {
-		matcher, err := buildMatcher(in)
+		matcher, err := buildMatcher(in.Terms, in.TermsByLanguage, in.Near, in.Regex)
 		if err != nil {
 			return errorResult(err), ScanOutput{}, nil
 		}
@@ -643,28 +659,28 @@ func (m specMatcher) covers(lang string) bool { return m.spec.Covers(lang) }
 
 // buildMatcher chooses how to search. It returns nil when the caller asked for
 // no search, in which case scanning only extracts content.
-func buildMatcher(in ScanInput) (textMatcher, error) {
+func buildMatcher(terms []string, byLanguage map[string][]string, near *match.Near, regex string) (textMatcher, error) {
 	// Language-aware matching wins whenever the caller supplied any, because a
 	// term tested only against its own language cannot collide with another's.
-	spec := match.Spec{Terms: map[string][]string{}, Near: in.Near}
-	for lang, terms := range in.TermsByLanguage {
-		spec.Terms[lang] = terms
+	spec := match.Spec{Terms: map[string][]string{}, Near: near}
+	for lang, t := range byLanguage {
+		spec.Terms[lang] = t
 	}
-	if len(in.Terms) > 0 {
-		spec.Terms[match.AnyLang] = append(spec.Terms[match.AnyLang], in.Terms...)
+	if len(terms) > 0 {
+		spec.Terms[match.AnyLang] = append(spec.Terms[match.AnyLang], terms...)
 	}
 	spec = spec.Normalize()
 	if !spec.Empty() {
 		return specMatcher{spec: spec}, nil
 	}
 
-	if r := strings.TrimSpace(in.Regex); r != "" {
+	if r := strings.TrimSpace(regex); r != "" {
 		if !strings.HasPrefix(r, "(?") {
 			r = "(?i)" + r
 		}
 		re, err := regexp.Compile(r)
 		if err != nil {
-			return nil, fmt.Errorf("invalid regex %q: %w", in.Regex, err)
+			return nil, fmt.Errorf("invalid regex %q: %w", regex, err)
 		}
 		return regexMatcher{re: re}, nil
 	}

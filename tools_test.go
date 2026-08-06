@@ -76,7 +76,7 @@ func TestTruncateCountsCharacters(t *testing.T) {
 }
 
 func TestBuildMatcherTermsAreLiteral(t *testing.T) {
-	m, err := buildMatcher(ScanInput{Terms: []string{"c.t", "spreco"}})
+	m, err := buildMatcher([]string{"c.t", "spreco"}, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestBuildMatcherTermsAreLiteral(t *testing.T) {
 }
 
 func TestBuildMatcherNoTermsMeansNoSearch(t *testing.T) {
-	m, err := buildMatcher(ScanInput{})
+	m, err := buildMatcher(nil, nil, nil, "")
 	if err != nil || m != nil {
 		t.Fatalf("expected no matcher and no error, got %v, %v", m, err)
 	}
@@ -99,10 +99,7 @@ func TestBuildMatcherNoTermsMeansNoSearch(t *testing.T) {
 func TestBuildMatcherPrefersLanguageAwareTerms(t *testing.T) {
 	// Terms tied to a language know what text they may be tested against; a
 	// regex applied to every notice does not.
-	m, err := buildMatcher(ScanInput{
-		TermsByLanguage: map[string][]string{"ITA": {"sprec"}},
-		Regex:           "ignored-because-terms-were-given",
-	})
+	m, err := buildMatcher(nil, map[string][]string{"ITA": {"sprec"}}, nil, "ignored-because-terms-were-given")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +112,7 @@ func TestBuildMatcherPrefersLanguageAwareTerms(t *testing.T) {
 }
 
 func TestBuildMatcherFallsBackToRegex(t *testing.T) {
-	m, err := buildMatcher(ScanInput{Regex: "gaspill\\w+"})
+	m, err := buildMatcher(nil, nil, nil, "gaspill\\w+")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +122,7 @@ func TestBuildMatcherFallsBackToRegex(t *testing.T) {
 }
 
 func TestBuildMatcherRejectsInvalidRegex(t *testing.T) {
-	if _, err := buildMatcher(ScanInput{Regex: "[unclosed"}); err == nil {
+	if _, err := buildMatcher(nil, nil, nil, "[unclosed"); err == nil {
 		t.Fatal("an invalid regex must be an error, not an empty search")
 	}
 }
