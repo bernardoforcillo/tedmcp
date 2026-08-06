@@ -94,28 +94,14 @@ func formatDossier(out DossierOutput) string {
 func formatFetchDocs(out FetchDocsOutput) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "Tried %d document link(s); retrieved %d.\n", out.Attempted, out.Retrieved)
+	fmt.Fprintf(&b, "Tried %d URL(s); %d answered; %d file(s) readable.\n",
+		out.Attempted, out.Retrieved, out.Readable)
 	if out.PublicationNumber != "" {
 		fmt.Fprintf(&b, "notice: %s\n", out.PublicationNumber)
 	}
 
 	for _, d := range out.Documents {
-		r := d.Result
-		fmt.Fprintf(&b, "\n[%s] %s\n", firstNonEmpty(d.Role, "requested"), r.URL)
-		fmt.Fprintf(&b, "  status: %s", r.Status)
-		if r.Filename != "" {
-			fmt.Fprintf(&b, "  file: %s", r.Filename)
-		}
-		if r.Bytes > 0 {
-			fmt.Fprintf(&b, "  bytes: %d", r.Bytes)
-		}
-		b.WriteString("\n")
-		if r.Reason != "" {
-			fmt.Fprintf(&b, "  reason: %s\n", r.Reason)
-		}
-		if r.Text != "" {
-			fmt.Fprintf(&b, "  --- content%s ---\n%s\n", ternary(r.Truncated, " (truncated)", ""), r.Text)
-		}
+		writeDownload(&b, d)
 	}
 
 	// Links that were deliberately not tried still matter to a reader deciding

@@ -34,6 +34,11 @@ type Result struct {
 	Text        string `json:"text,omitempty" jsonschema:"text content, for HTML and plain-text documents"`
 	Truncated   bool   `json:"truncated,omitempty"`
 	Filename    string `json:"filename,omitempty"`
+
+	// Data is the body as retrieved. It stays out of the JSON result — a
+	// caller wants a capitolato's text, not eight megabytes of base64 — but it
+	// is what makes reading a PDF or an archive possible at all.
+	Data []byte `json:"-"`
 }
 
 // Retrieved reports whether the document was actually obtained.
@@ -65,7 +70,20 @@ const maxDocumentBytes = 16 << 20
 
 // Fetch retrieves one document if the site permits it. A refusal is a normal
 // result, not an error: only a malformed request returns err.
+//
+// Textual bodies come back in Text, truncated to maxChars (0 for no limit).
 func (c *Client) Fetch(ctx context.Context, rawURL string, maxChars int) (Result, error) {
+	return c.fetch(ctx, rawURL, maxChars)
+}
+
+// FetchRaw retrieves a document without rendering its body as text, for a
+// caller that will extract it themselves. A capitolato is a PDF, and copying
+// its bytes into a string that nobody reads is pure waste.
+func (c *Client) FetchRaw(ctx context.Context, rawURL string) (Result, error) {
+	return c.fetch(ctx, rawURL, -1)
+}
+
+func (c *Client) fetch(ctx context.Context, rawURL string, maxChars int) (Result, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || !strings.HasPrefix(u.Scheme, "http") {
 		return Result{}, fmt.Errorf("not a fetchable URL: %q", rawURL)
@@ -121,7 +139,8 @@ func (c *Client) Fetch(ctx context.Context, rawURL string, maxChars int) (Result
 	}
 
 	res.Status = StatusFetched
-	if isTextual(res.ContentType) {
+	res.Data = data
+	if maxChars >= 0 && isTextual(res.ContentType) {
 		text := string(data)
 		if maxChars > 0 && len(text) > maxChars {
 			text, res.Truncated = text[:maxChars], true

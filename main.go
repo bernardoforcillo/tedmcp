@@ -49,15 +49,25 @@ Tools:
   the buyer's tender documents.
 - get_tender_dossier: one procurement in full — buyer and contacts, exact deadline
   with the time of day, lots, award criteria, and every link labelled by role.
-- fetch_tender_documents: try to download the capitolato and disciplinare from the
-  buyer's portal, obeying that site's robots.txt.
+- fetch_tender_documents: download ALL of a tender's documents from the buyer's
+  portal — following the procedure page to the capitolato, the disciplinare and the
+  allegati — and return their text. Obeys that site's robots.txt.
+- scan_tender_documents: search inside those documents, with the same per-language
+  terms as scan_tenders. This is where a requirement lives when the notice omits it.
 - lookup_anac: join a notice to the Italian national contracts database to get its
   CIG and award outcome, from a locally downloaded ANAC snapshot.
 - get_tender: fetch one notice by its publication number (e.g. 521055-2026).
 - get_tender_document: download a notice's file (xml full text, or pdf/html link).
 
 Typical flow: search_tenders to find notices, then get_tender_dossier to understand
-one, then fetch_tender_documents to try to read its capitolato.
+one, then fetch_tender_documents to read its capitolato.
+
+The two scans answer different questions and cost very different amounts.
+scan_tenders reads notices from TED: cheap, cached, and good for sweeping a hundred
+tenders down to a handful. scan_tender_documents reads the buyer's own documents:
+many requests to a small server, a few tenders per call. Narrow with the first, then
+confirm with the second. A requirement absent from a notice is not absent from the
+tender — it is usually in the disciplinare, and only the second tool can see it.
 
 Picking between keywords and scan_tenders matters. TED's full-text index only covers
 a notice's title and short description, so keywords work for the SUBJECT of a tender
@@ -92,6 +102,10 @@ Three limits are worth stating plainly whenever you report results:
   robots-denied or captcha, the documents exist and are public — they simply require
   a human with a browser. Never report that as "no documents available", and do not
   try to work around it with other tools.
+- A document that was downloaded is not always a document that was read. A PDF
+  reported as no-text-layer is a scan of paper: real, public, and unreadable without
+  OCR. Both scans list what they could not read separately from what they searched;
+  report those lists rather than folding them into a count of zero matches.
 - ANAC holds structured data only (CIG, amounts, outcome), never the documents.
 
 Picking between keywords and scan_tenders matters. TED's full-text index only covers

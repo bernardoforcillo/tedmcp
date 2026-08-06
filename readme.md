@@ -2,8 +2,10 @@
 
 An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant search
 **TED — Tenders Electronic Daily**, the European Union's public procurement journal
-(<https://ted.europa.eu>). It finds tenders/procurement notices and downloads the
-underlying tender files so their full content can be read and searched.
+(<https://ted.europa.eu>). It finds tenders/procurement notices, and then goes after
+what TED does not carry: the buyer's own capitolato, disciplinare and allegati, read
+out of the PDFs, archives and signature envelopes they are published as, so their full
+content can be searched.
 
 Built with the official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk).
 It talks to the public **TED search API v3** (`https://api.ted.europa.eu`), which
@@ -16,7 +18,8 @@ needs **no API key**.
 | `search_tenders` | Search notices by free-text `keywords`, `cpv` codes, buyer `country`, `notice_type`, publication date, and submission deadline. Returns matches with buyer, CPV, deadline, value, and document links. |
 | `scan_tenders` | Search **inside** many notices at once: downloads each notice's eForms XML in parallel and reports where your terms appear, with the award criteria and their weights. Matches per declared language, so terms don't collide across borders. |
 | `get_tender_dossier` | One procurement in full: buyer with contacts and codice fiscale, the exact deadline **including the time of day**, lots, award criteria, and every link labelled by what it leads to. |
-| `fetch_tender_documents` | Try to download the capitolato and disciplinare from the buyer's portal, obeying that site's `robots.txt` and reporting honestly when it cannot. |
+| `fetch_tender_documents` | Download **all** of a tender's documents from the buyer's portal — following the procedure page to the capitolato, the disciplinare and the allegati — and return their text. Reads PDF, DOCX, XLSX, ODF, ZIP and `.p7m`. Obeys that site's `robots.txt` and reports honestly when it cannot. |
+| `scan_tender_documents` | Search **inside** those documents, with the same per-language terms as `scan_tenders`. This is where a requirement lives when the notice omits it. |
 | `lookup_anac` | Join a notice to the Italian national contracts database (ANAC) to get its **CIG**, official amounts and outcome. |
 | `get_tender` | Fetch one notice by its `publication_number` (e.g. `519405-2026`) with all raw fields and PDF/XML/HTML links. |
 | `get_tender_document` | Download a notice's file. `format=xml` (default) returns the machine-readable eForms content as text; `pdf`/`html` return the URL and metadata. This is how you read the full procurement text. |
@@ -153,7 +156,8 @@ written entries; `scan_tenders` reports how many documents it read locally.
 Two things to keep in mind when reading a result:
 
 - **No match is not proof of absence.** The requirement may be in the capitolato,
-  which is not on TED at all — follow `document_urls`.
+  which is not on TED at all — follow `document_urls`, or hand the same terms to
+  [`scan_tender_documents`](#scan_tender_documents--searching-inside-the-capitolato).
 - Notices whose document could not be downloaded are listed separately as **not
   searched**, so a throttled download never masquerades as "no match".
 
@@ -164,7 +168,7 @@ A tender has three layers, and only the first is on TED:
 | Layer | Where it lives | Retrievable automatically |
 | --- | --- | --- |
 | The notice — buyer, deadlines, lots, often the scoring grid | TED eForms XML | **yes** — `get_tender_dossier` |
-| The capitolato and disciplinare — the actual requirements | the buyer's own portal | **usually not**, see below |
+| The capitolato and disciplinare — the actual requirements | the buyer's own portal | **when the portal allows it** — `fetch_tender_documents`, see below |
 | CIG, official amounts, award outcome | ANAC national database | **yes**, from a downloaded snapshot — `lookup_anac` |
 
 **`get_tender_dossier`** costs no extra request beyond the XML that is fetched anyway,
@@ -180,8 +184,56 @@ not interchangeable:
 [appeal-body]         https://www.giustizia-amministrativa.it/   ← the TAR, not a document source
 ```
 
-**`fetch_tender_documents`** attempts the download and obeys `robots.txt`. Expect it to
-be refused: the Maggioli *Portale Appalti* software behind most Italian municipal
+**`fetch_tender_documents`** goes and gets them — all of them.
+
+The step that matters is the one that is easy to miss: **a notice never links to the
+capitolato.** It links to a *procedure page* on the buyer's portal, and the documents
+hang off that page one hop away. Fetching the link and stopping returns a page of
+navigation, which is what this tool used to do. It now follows that page to the files
+it lists, downloads them, and extracts their text:
+
+```
+[tender-documents] https://appalti.comune.…/procedure/codice/G00749
+  status: fetched  (procedure page listing the documents)
+
+[tender-document] Disciplinare di gara
+  https://appalti.comune.…/download/1204
+  status: fetched  file: disciplinare.pdf.p7m  bytes: 812345
+  disciplinare.pdf — pdf, 34 page(s), 58210 character(s)
+  --- disciplinare.pdf ---
+  Art. 12 — Criteri di valutazione …
+```
+
+It follows **one** hop, and only within the site it started on. Walking further would
+turn a document fetch into a crawl of the portal, which is the thing these sites'
+`robots.txt` files exist to refuse. Set `discover: false` to fetch only the URL itself.
+
+#### What it can read
+
+| Arrives as | Read as |
+| --- | --- |
+| PDF | text, laid out line by line, with wide column gaps preserved so a scoring grid still reads as a grid |
+| DOCX, XLSX, PPTX, ODT/ODS/ODP | text, including Word headers and footers, where the procedure reference often hides |
+| ZIP | expanded into its members, each read in its own right; a PDF inside an archive is read as a PDF |
+| `.p7m` | opened. Italian documents are published signed — `capitolato.pdf.p7m` — and the PDF is intact inside the CAdES envelope |
+| HTML, plain text, XML, CSV | text |
+
+Formats are decided by looking at the bytes, not the extension, because portals serve
+everything as `application/octet-stream` under names like `download.php?id=42`.
+
+Opening a `.p7m` does **not** verify the signature, and saying so matters: whether a
+seal is valid is a legal question about a party's identity, needing a trust store,
+revocation data and a timestamp. Extracting the document in order to read it makes no
+claim either way.
+
+Two caps keep one call from returning a library: `max_documents` (default 25) and
+`max_total_chars` (default 150 000). Both are reported when they bite, and files are
+ranked by name before the cut, so what gets dropped is the ESPD form rather than the
+disciplinare.
+
+#### When it cannot
+
+Expect refusals. The Maggioli *Portale Appalti* software behind most Italian municipal
 portals answers
 
 ```
@@ -204,6 +256,64 @@ the buyer has chosen to serve them to people rather than to programs. A `robots-
 or `captcha` result must never be reported as "no documents exist" — it means *go and
 open this URL*. The server sends a user agent that names itself (`tedmcp/0.1`)
 precisely so those rules can apply to it.
+
+There is a second kind of refusal that looks nothing like the first and matters just as
+much:
+
+```
+capitolato.pdf — pdf, 48 page(s)  [no-text-layer]
+    48 page(s) carrying no text layer — this is a scanned document, readable by a
+    person but not by this program without OCR
+```
+
+A capitolato that was printed, signed and scanned back in is a real document saying
+real things. It is reported as `no-text-layer`, never as an empty one, because a count
+of zero matches over a stack of scans is not a finding.
+
+### `scan_tender_documents` — searching inside the capitolato
+
+`scan_tenders` has to end with a caveat: a requirement absent from the notice may still
+be in the tender documents. This tool follows that pointer, so "not found" can finally
+mean something. It takes the same `terms`, `terms_by_language`, `near` and `regex`,
+downloads each tender's documents, and searches inside them.
+
+```json
+{
+  "publication_numbers": ["442511-2026", "517698-2026"],
+  "terms_by_language": {"ITA": ["eccedenz", "spreco", "avanzi"]}
+}
+```
+
+> Searched the documents of 2 tender(s); 1 contains a match.
+>
+> `442511-2026 — Servizio di ristorazione scolastica`
+> `  language: ITA`
+> `  14 file(s) retrieved, 11 readable, 2 match(es)`
+>
+> `  match in disciplinare.pdf [eccedenz]`
+> `    …5 punti per il recupero delle eccedenze alimentari non somministrate…`
+
+The per-language discipline is kept, and the language comes from a better place than a
+guess: the eForms notice declares the language its procurement is conducted in, and its
+capitolato is written in that language. Documents reached by `urls` rather than through
+a notice carry no such declaration, so pass `language` for them — without it every term
+is tried against every document, and the collisions described in
+[Searching across languages](#searching-across-languages) come back.
+
+Two lists sit beside the matches, and they are the reason to read the output at all:
+
+- **NOT SEARCHED** — documents retrieved but unreadable: the scans, the encrypted
+  files, the formats with no reader.
+- **NOT RETRIEVED** — URLs the portal declined to serve, each with its reason.
+
+A tender with nothing in either list and no matches genuinely does not mention your
+terms. A tender with eleven entries under NOT RETRIEVED has not been searched at all.
+Reporting those two the same way is the failure this output exists to prevent.
+
+Downloading one tender's documents is a dozen requests to a small municipal server, so
+this searches **a few tenders per call** (`limit`, default 5, max 20) rather than a page
+of them. Narrow the field with `scan_tenders`, which is cheap and cached, then confirm
+the survivors here.
 
 ### `lookup_anac` — getting the CIG
 
@@ -376,6 +486,19 @@ The assistant calls `search_tenders` (`cpv: ["72000000"]`, `country: ["DEU"]`,
 `keywords: "cloud"`, `published_from: …`), picks a `publication_number`, then calls
 `get_tender_document` with `format=xml` to read the procurement details.
 
+> "Which open Italian catering tenders award points for recovering unserved food?"
+
+Only the first half of that question can be answered from TED. The assistant calls
+`scan_tenders` (`cpv: ["555*"]`, `country: ["ITA"]`, `terms_by_language: {"ITA":
+["eccedenz","spreco"]}`) to find the notices that publish such a criterion, and gets a
+handful — plus a longer list whose notices publish no scoring grid at all and defer to
+the disciplinare. Those are not answers; they are the question restated. It then hands
+the same terms to `scan_tender_documents` for that list, which downloads each tender's
+disciplinare from its buyer's portal and searches inside. What comes back is three
+things kept apart: the tenders that award points and where it says so, the tenders that
+demonstrably do not, and the tenders whose portal would not serve a program — which
+remain unanswered, and are reported as such rather than as an absence.
+
 ## Layout
 
 ```
@@ -385,8 +508,11 @@ Dockerfile               two-stage build onto a distroless base
 main.go                  server setup, stdio and HTTP transports
 tools.go                 search/scan tool definitions and handlers
 dossier_tools.go         dossier, document-fetch and ANAC tool handlers
+docscan_tools.go         scan_tender_documents: searching inside the tender documents
+documents.go             retrieving a tender's documents, shared by both tools
 format.go                human-readable result rendering
 dossier_format.go        rendering for the dossier/fetch/ANAC results
+document_format.go       rendering for retrieved documents and document scans
 internal/ted/client.go   TED search API v3 client + paced document downloads
 internal/ted/query.go    expert-query builder
 internal/ted/notice.go   notice field flattening + summaries
@@ -394,7 +520,8 @@ internal/ted/eforms.go   eForms parsing for award criteria, languages, term matc
 internal/ted/dossier.go  eForms parsing for parties, lots, deadlines, link roles
 internal/ted/cache.go    on-disk cache of notice documents
 internal/match/          per-language and paired-root text matching
-internal/webdoc/         robots.txt-respecting document retrieval
+internal/webdoc/         robots.txt-respecting document retrieval and link discovery
+internal/doctext/        text extraction from PDF, ZIP, DOCX/XLSX/ODF and .p7m
 internal/anac/           ANAC open-data snapshot lookup by codice fiscale
 ```
 
@@ -405,10 +532,18 @@ internal/anac/           ANAC open-data snapshot lookup by codice fiscale
   HTTP 429. Downloads are paced client-side (one every 250 ms, shared across
   goroutines) and retried with backoff, so `scan_tenders` covers a full page of
   notices without dropping any.
+- Buyer portals are not `ted.europa.eu`. A municipal procurement site is a small
+  server, so document downloads run four at a time by default (`concurrency`, max 8)
+  and `scan_tender_documents` takes one tender at a time rather than a page of them.
 - Notice fields are multilingual; English (`ENG`) is preferred where available, with
   a deterministic fallback to other languages.
 - For deep pagination beyond what `page`/`limit` allow, refine the query with more
   filters rather than paging very far.
+- Text extraction adds one dependency,
+  [`github.com/ledongthuc/pdf`](https://github.com/ledongthuc/pdf) (BSD, pure Go, no
+  cgo — the image stays a static binary on distroless). Everything else — ZIP, the
+  OOXML and OpenDocument formats, and the CAdES `.p7m` envelope — is read with the
+  standard library.
 
 ## Licence
 

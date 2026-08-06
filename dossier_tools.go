@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/bernardoforcillo/tedmcp/internal/anac"
 	"github.com/bernardoforcillo/tedmcp/internal/ted"
@@ -72,24 +71,24 @@ func handleDossier(tc *ted.Client) func(context.Context, *mcp.CallToolRequest, D
 // --- fetch_tender_documents ---
 
 type FetchDocsInput struct {
-	PublicationNumber string   `json:"publication_number,omitempty" jsonschema:"TED publication number whose document links should be tried"`
-	URLs              []string `json:"urls,omitempty" jsonschema:"specific document URLs to retrieve, instead of taking them from a notice"`
-	MaxChars          int      `json:"max_chars,omitempty" jsonschema:"truncate each retrieved text document to this many characters (default 20000)"`
+	PublicationNumber string   `json:"publication_number,omitempty" jsonschema:"TED publication number whose document links should be followed"`
+	URLs              []string `json:"urls,omitempty" jsonschema:"specific URLs to retrieve, instead of taking them from a notice. A procedure page works as well as a direct file link"`
+	Discover          *bool    `json:"discover,omitempty" jsonschema:"follow the procedure page to the files it lists — the capitolato, the disciplinare and the allegati — instead of stopping at the page itself (default true)"`
+	MaxDocuments      int      `json:"max_documents,omitempty" jsonschema:"how many files to download, 1-60 (default 25). When a page lists more, the ones whose names look like the tender's core documents are taken first and the rest are reported as skipped"`
+	MaxChars          int      `json:"max_chars,omitempty" jsonschema:"characters of text kept per document (default 20000)"`
+	MaxTotalChars     int      `json:"max_total_chars,omitempty" jsonschema:"characters of text kept across all documents (default 150000). Documents past the budget are still listed, with their name and size, so they can be fetched one at a time"`
 	IncludeAllRoles   bool     `json:"include_all_roles,omitempty" jsonschema:"also try the buyer's website and the appeals body, which do not hold tender documents (default false)"`
+	Concurrency       int      `json:"concurrency,omitempty" jsonschema:"parallel downloads, 1-8 (default 4). Buyer portals are small servers; be considerate"`
 }
 
 type FetchDocsOutput struct {
 	PublicationNumber string             `json:"publication_number,omitempty"`
-	Attempted         int                `json:"attempted"`
-	Retrieved         int                `json:"retrieved"`
-	Documents         []FetchedDoc       `json:"documents,omitempty"`
+	Attempted         int                `json:"attempted" jsonschema:"URLs tried"`
+	Retrieved         int                `json:"retrieved" jsonschema:"URLs that answered with content"`
+	Readable          int                `json:"readable" jsonschema:"files whose text could actually be read"`
+	Documents         []download         `json:"documents,omitempty"`
 	Links             []ted.DocumentLink `json:"links,omitempty" jsonschema:"every link in the notice, labelled by role"`
 	Note              string             `json:"note,omitempty"`
-}
-
-type FetchedDoc struct {
-	Role   string        `json:"role,omitempty"`
-	Result webdoc.Result `json:"result"`
 }
 
 // documentRoles are the links worth trying: the others lead to institutional
@@ -98,67 +97,62 @@ var documentRoles = []string{ted.LinkTenderDocuments, ted.LinkSubmission, ted.Li
 
 func handleFetchDocuments(tc *ted.Client, wc *webdoc.Client) func(context.Context, *mcp.CallToolRequest, FetchDocsInput) (*mcp.CallToolResult, FetchDocsOutput, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in FetchDocsInput) (*mcp.CallToolResult, FetchDocsOutput, error) {
-		maxChars := in.MaxChars
-		if maxChars <= 0 {
-			maxChars = 20000
-		}
-
-		var targets []ted.DocumentLink
 		out := FetchDocsOutput{PublicationNumber: strings.TrimSpace(in.PublicationNumber)}
-
-		switch {
-		case len(in.URLs) > 0:
-			for _, u := range in.URLs {
-				targets = append(targets, ted.DocumentLink{URL: strings.TrimSpace(u), Role: "requested"})
-			}
-		case out.PublicationNumber != "":
-			links, err := noticeLinks(ctx, tc, out.PublicationNumber)
-			if err != nil {
-				return errorResult(err), FetchDocsOutput{}, nil
-			}
-			out.Links = links
-			for _, l := range links {
-				if in.IncludeAllRoles || hasRole(documentRoles, l.Role) {
-					targets = append(targets, l)
-				}
-			}
-		default:
+		if out.PublicationNumber == "" && len(in.URLs) == 0 {
 			return errorResult(fmt.Errorf("give either publication_number or urls")), FetchDocsOutput{}, nil
 		}
+
+		targets, links, err := documentTargets(ctx, tc, out.PublicationNumber, in.URLs, in.IncludeAllRoles)
+		if err != nil {
+			return errorResult(err), FetchDocsOutput{}, nil
+		}
+		out.Links = links
 
 		if len(targets) == 0 {
 			out.Note = "The notice names no link that could hold tender documents."
 			return textResult(formatFetchDocs(out)), out, nil
 		}
 
-		docs := make([]FetchedDoc, len(targets))
-		var wg sync.WaitGroup
-		for i, t := range targets {
-			wg.Add(1)
-			go func(i int, t ted.DocumentLink) {
-				defer wg.Done()
-				res, err := wc.Fetch(ctx, t.URL, maxChars)
-				if err != nil {
-					res = webdoc.Result{URL: t.URL, Status: webdoc.StatusError, Reason: err.Error()}
-				}
-				docs[i] = FetchedDoc{Role: t.Role, Result: res}
-			}(i, t)
+		docs := gatherDocuments(ctx, wc, targets, gatherOptions{
+			Discover:     in.Discover == nil || *in.Discover,
+			MaxDocuments: in.MaxDocuments,
+			MaxChars:     in.MaxChars,
+			Workers:      in.Concurrency,
+		})
+
+		totalChars := in.MaxTotalChars
+		if totalChars <= 0 {
+			totalChars = defaultTotalChars
 		}
-		wg.Wait()
+		withheld := applyTextBudget(docs, totalChars)
 
 		out.Documents = docs
-		out.Attempted = len(docs)
-		for _, d := range docs {
-			if d.Result.Retrieved() {
-				out.Retrieved++
-			}
-		}
-		if out.Retrieved == 0 {
-			out.Note = "Nothing could be retrieved automatically. This is normal for Italian procurement portals: " +
-				"the documents exist and are public, but the site reserves them for human visitors. Open the tender-documents URL in a browser."
-		}
+		out.Attempted = attemptedCount(docs)
+		out.Retrieved = retrievedCount(docs)
+		out.Readable = readableFiles(docs)
+		out.Note = fetchNote(out, withheld, totalChars)
+
 		return textResult(formatFetchDocs(out)), out, nil
 	}
+}
+
+// fetchNote says what the numbers mean, because the interesting outcomes here
+// are the partial ones and none of them is self-evident from a count.
+func fetchNote(out FetchDocsOutput, withheld, totalChars int) string {
+	switch {
+	case out.Retrieved == 0:
+		return "Nothing could be retrieved automatically. This is normal for Italian procurement portals: " +
+			"the documents exist and are public, but the site reserves them for human visitors. " +
+			"Open the tender-documents URL in a browser."
+	case out.Readable == 0:
+		return "The files came back but none of them yielded text — see each file's status. A PDF reported as " +
+			"no-text-layer is a scan: it is readable by a person and needs OCR, not a different tool."
+	case withheld > 0:
+		return fmt.Sprintf("%d document(s) were retrieved but their text is not shown, because the total budget of "+
+			"%d characters was reached. They are listed with their names: fetch them individually with urls, "+
+			"or raise max_total_chars.", withheld, totalChars)
+	}
+	return ""
 }
 
 // --- lookup_anac ---
