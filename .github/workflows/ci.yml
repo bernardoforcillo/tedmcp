@@ -2,18 +2,40 @@ name: ci
 
 on:
   pull_request:
+
   push:
     branches: [main]
     # Build the image only when something that goes into it changes.
     # Manifest edits under infrastructure/** (e.g. Flux's image-automation
     # commit) never change the binary, so they don't match and the workflow
     # is skipped — this breaks the CI → new image → Flux commit → CI loop.
+    #
+    # '**.go' rather than '**/*.go': in a filter pattern '**' matches any run
+    # of characters including the separator, so '**/*.go' still requires a
+    # directory in the path and silently misses main.go, tools.go and every
+    # other Go file at the repository root — which is most of this program.
     paths:
-      - '**/*.go'
+      - '**.go'
       - 'go.mod'
       - 'go.sum'
       - 'Dockerfile'
       - '.github/workflows/ci.yml'
+
+  # A merge can land on main without any event that starts a run — a push made
+  # by an integration's token does not always create one — and then the branch
+  # everything ships from has never been checked. This is how to ask for a run
+  # by hand, and it is the one trigger that is never suppressed.
+  workflow_dispatch:
+
+# A newer push supersedes an older one: the earlier run can only report on code
+# nobody will look at again. Pull requests and main are kept in separate groups
+# so a PR update never cancels the run that gates a release.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   quality:
@@ -26,16 +48,40 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Cheapest check first, and the one a reviewer should never have to make
+      # by hand. `make check` runs it locally, so CI enforcing it keeps the two
+      # from drifting apart.
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: vet
         run: go vet ./...
 
+      # -race because the tools download documents in parallel: a data race
+      # there would show up as a corrupted capitolato rather than a crash.
       - name: test
         run: go test -race ./...
 
-  docker:
+      # What ships is a static, cgo-free binary on a distroless base. Proving
+      # that here means a build that cannot go in the image is caught in
+      # seconds, rather than at the end of a multi-architecture image build.
+      - name: build
+        run: CGO_ENABLED=0 go build ./...
+
+  image:
     needs: quality
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    env:
+      # Publish only from main. A pull request still builds the image — that is
+      # how a broken Dockerfile is found before the merge instead of after —
+      # but nothing from an unreviewed branch is pushed anywhere.
+      PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +92,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
+        if: env.PUBLISH == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -54,16 +101,24 @@ jobs:
       - name: Compute image tags
         id: tags
         run: |
-          REPO="${{ secrets.DOCKERHUB_USERNAME }}/tedmcp"
-          STAMP="$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA}"
-          echo "tags=${REPO}:${STAMP},${REPO}:latest" >> "$GITHUB_OUTPUT"
+          if [ "${PUBLISH}" = "true" ]; then
+            REPO="${{ secrets.DOCKERHUB_USERNAME }}/tedmcp"
+            STAMP="$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA}"
+            echo "tags=${REPO}:${STAMP},${REPO}:latest" >> "$GITHUB_OUTPUT"
+          else
+            # Never pushed, so the name only has to be a valid one.
+            echo "tags=tedmcp:ci" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUBLISH == 'true' }}
+          # Both architectures for a release. One for a pull request: emulating
+          # arm64 under QEMU costs minutes and proves nothing the amd64 build
+          # has not already proved about the Dockerfile.
+          platforms: ${{ env.PUBLISH == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
