@@ -59,8 +59,30 @@ Tools:
 - get_tender: fetch one notice by its publication number (e.g. 521055-2026).
 - get_tender_document: download a notice's file (xml full text, or pdf/html link).
 
+Prompts carry the procedures these tools exist for, so a workflow does not have to be
+rewritten in every client that connects:
+- scouting: turn a description of what a company does into a shortlist of open tenders.
+- qualifica: go/no-go on one tender, against what a company can prove it holds.
+- analisi: what winning one tender requires — the scoring grid and where the points are.
+None of them names a sector. What a company does is an argument, so the same three
+serve every client of a bid office. Offer them when a request matches one.
+
 Typical flow: search_tenders to find notices, then get_tender_dossier to understand
 one, then fetch_tender_documents to read its capitolato.
+
+CHOOSING CPV CODES is where a search fails most often, and it fails silently. TED
+matches child codes automatically, so a full 8-digit code is nearly always narrower
+than intended; start at 3 digits (e.g. 905*) and narrow only if the result is
+unmanageable. A wrong family returns nothing, which is indistinguishable from "there
+are no such tenders" — so state which families you chose and why, where the person
+reading can correct you.
+
+WHEN A SEARCH RETURNS NOTHING, that is a result to diagnose, not to report. In order:
+widen the CPV to fewer digits; confirm the family means what you think it means; move
+the requirement out of keywords and into scan_tenders terms, since keywords only sees
+the title and a short description; widen the date window; check scope and notice_type.
+Report "no tenders match" only once those have been tried, and say which of them you
+tried.
 
 The two scans answer different questions and cost very different amounts.
 scan_tenders reads notices from TED: cheap, cached, and good for sweeping a hundred
@@ -92,10 +114,11 @@ once published, so refining a search is cheap: the first pass over a few hundred
 notices takes minutes, every pass after that takes seconds. Say so rather than
 narrowing a search to save time.
 
-Three limits are worth stating plainly whenever you report results:
+Four limits are worth stating plainly whenever you report results:
 
 - Notices are not obliged to publish their scoring grid; many just point to the
-  disciplinare di gara. Absence of a match is not proof the requirement is missing.
+  disciplinare di gara, and scan_tenders flags that as criteria_published=false.
+  Absence of a match is not proof the requirement is missing.
 - TED never carries the capitolato itself. It lives on the buyer's own platform, and
   most Italian procurement portals disallow automated clients in robots.txt and put
   the procedure page behind a captcha. When fetch_tender_documents reports
@@ -106,18 +129,7 @@ Three limits are worth stating plainly whenever you report results:
   reported as no-text-layer is a scan of paper: real, public, and unreadable without
   OCR. Both scans list what they could not read separately from what they searched;
   report those lists rather than folding them into a count of zero matches.
-- ANAC holds structured data only (CIG, amounts, outcome), never the documents.
-
-Picking between keywords and scan_tenders matters. TED's full-text index only covers
-a notice's title and short description, so keywords work for the SUBJECT of a tender
-(school catering, cloud computing) and fail for a REQUIREMENT inside it (food waste
-measures, CO2 reporting, staff training) — those live in the award criteria or in the
-tender documents. Use scan_tenders for the second kind: it takes the same filters as
-search_tenders plus terms to look for inside each notice.
-
-Notices are not obliged to publish their scoring grid; many just point to the
-disciplinare di gara, and scan_tenders flags that as criteria_published=false. Absence
-of a match is therefore not proof the requirement is missing — say so when reporting.`
+- ANAC holds structured data only (CIG, amounts, outcome), never the documents.`
 
 // documentUserAgent identifies this server to the buyer portals it fetches
 // documents from. It names the software honestly: sites match their robots.txt
@@ -164,6 +176,7 @@ func main() {
 	})
 
 	registerTools(server, client, documents)
+	registerPrompts(server)
 
 	// One process, one transport: stdio when launched as a client's subprocess,
 	// HTTP when it needs to be reachable over the network.

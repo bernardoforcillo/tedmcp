@@ -24,6 +24,31 @@ needs **no API key**.
 | `get_tender` | Fetch one notice by its `publication_number` (e.g. `519405-2026`) with all raw fields and PDF/XML/HTML links. |
 | `get_tender_document` | Download a notice's file. `format=xml` (default) returns the machine-readable eForms content as text; `pdf`/`html` return the URL and metadata. This is how you read the full procurement text. |
 
+## Prompts
+
+The tools say what this server can fetch. The prompts say how the work is done — and
+they ship with the server, so a procedure written once reaches every client that
+connects rather than being retyped in each one's own format.
+
+| Prompt | Arguments | What it does |
+| --- | --- | --- |
+| `scouting` | `profile` (required), `countries`, `days` | Turns a description of what a company does into CPV families, a search, and a shortlist with deadlines, values and the reason each tender matched. |
+| `qualifica` | `publication_number` (required), `holds` | Go/no-go before anyone writes a bid: pulls the participation requirements out of the disciplinare and tests them against what the company can prove. |
+| `analisi` | `publication_number` (required), `focus` | What winning requires: the scoring grid, what earns each point, the contract terms, and where the bid is decided. |
+
+**None of them names a sector.** What a company does, what it holds and where it bids
+are arguments, so the same three prompts serve a bid office with forty clients across
+forty industries. A test enforces it: writing a CPV code or an industry term into a
+prompt fails the build. The rule is the one
+[`internal/match`](internal/match/match.go) already keeps for search terms — the
+server ships no vocabulary of its own — applied to procedure.
+
+Two habits are built into all three, because both failures produce an answer that
+looks like a finding and is not one. A requirement is quoted with the file it came
+from, never paraphrased or inferred from what similar tenders usually demand. And
+what could not be retrieved or read is reported separately from what was searched,
+so a shortlist never hides which of its entries were actually checked.
+
 ### `search_tenders` inputs
 
 All optional, but you must supply at least one filter (or a raw `query`):
