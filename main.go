@@ -42,6 +42,8 @@ import (
 const serverInstructions = `tedmcp searches TED, the European Union's public procurement journal.
 
 Tools:
+- lookup_cpv: find the CPV codes for a kind of work, by name, in any EU language.
+  Built in, no network. Use it before searching whenever the codes are not known.
 - search_tenders: find procurement notices by keywords, CPV codes, buyer country,
   notice type, publication date, and submission deadline.
 - scan_tenders: search inside many notices at once — downloads their eForms XML in
@@ -70,12 +72,13 @@ serve every client of a bid office. Offer them when a request matches one.
 Typical flow: search_tenders to find notices, then get_tender_dossier to understand
 one, then fetch_tender_documents to read its capitolato.
 
-CHOOSING CPV CODES is where a search fails most often, and it fails silently. TED
-matches child codes automatically, so a full 8-digit code is nearly always narrower
-than intended; start at 3 digits (e.g. 905*) and narrow only if the result is
-unmanageable. A wrong family returns nothing, which is indistinguishable from "there
-are no such tenders" — so state which families you chose and why, where the person
-reading can correct you.
+CHOOSING CPV CODES is where a search fails most often, and it fails silently. Do not
+guess them: lookup_cpv searches the vocabulary by name in any EU language and returns
+the families to search, at no cost. TED matches child codes automatically, so a full
+8-digit code is nearly always narrower than intended; start at 3 digits (e.g. 905*)
+and narrow only if the result is unmanageable. A wrong family returns nothing, which
+is indistinguishable from "there are no such tenders" — so state which families you
+chose and why, where the person reading can correct you.
 
 WHEN A SEARCH RETURNS NOTHING, that is a result to diagnose, not to report. In order:
 widen the CPV to fewer digits; confirm the family means what you think it means; move

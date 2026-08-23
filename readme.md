@@ -15,6 +15,7 @@ needs **no API key**.
 
 | Tool | What it does |
 | --- | --- |
+| `lookup_cpv` | Find the CPV codes for a kind of work by searching the vocabulary's own names, in any of the 24 official languages. Built into the binary, no network. Use it before searching whenever the codes are not already known. |
 | `search_tenders` | Search notices by free-text `keywords`, `cpv` codes, buyer `country`, `notice_type`, publication date, and submission deadline. Returns matches with buyer, CPV, deadline, value, and document links. |
 | `scan_tenders` | Search **inside** many notices at once: downloads each notice's eForms XML in parallel and reports where your terms appear, with the award criteria and their weights. Matches per declared language, so terms don't collide across borders. |
 | `get_tender_dossier` | One procurement in full: buyer with contacts and codice fiscale, the exact deadline **including the time of day**, lots, award criteria, and every link labelled by what it leads to. |
@@ -24,30 +25,60 @@ needs **no API key**.
 | `get_tender` | Fetch one notice by its `publication_number` (e.g. `519405-2026`) with all raw fields and PDF/XML/HTML links. |
 | `get_tender_document` | Download a notice's file. `format=xml` (default) returns the machine-readable eForms content as text; `pdf`/`html` return the URL and metadata. This is how you read the full procurement text. |
 
-## Prompts
+### `lookup_cpv` — getting the codes right
 
-The tools say what this server can fetch. The prompts say how the work is done — and
-they ship with the server, so a procedure written once reaches every client that
-connects rather than being retyped in each one's own format.
+Every search here begins with a CPV code, and that is where one fails most quietly.
+There are **9,454 codes**; pick the wrong family and TED returns an empty list, which
+reads exactly like *there are no such tenders*. Nothing downstream recovers from it,
+because everything downstream is conditioned on the code.
 
-| Prompt | Arguments | What it does |
-| --- | --- | --- |
-| `scouting` | `profile` (required), `countries`, `days` | Turns a description of what a company does into CPV families, a search, and a shortlist with deadlines, values and the reason each tender matched. |
-| `qualifica` | `publication_number` (required), `holds` | Go/no-go before anyone writes a bid: pulls the participation requirements out of the disciplinare and tests them against what the company can prove. |
-| `analisi` | `publication_number` (required), `focus` | What winning requires: the scoring grid, what earns each point, the contract terms, and where the bid is decided. |
+So the vocabulary is built in — all 9,454 codes with their names in all 24 official
+languages, 2.4 MB compressed, decompressed on first use. A tool whose job is to stop
+a silent failure should not itself depend on a host being reachable.
 
-**None of them names a sector.** What a company does, what it holds and where it bids
-are arguments, so the same three prompts serve a bid office with forty clients across
-forty industries. A test enforces it: writing a CPV code or an industry term into a
-prompt fails the build. The rule is the one
-[`internal/match`](internal/match/match.go) already keeps for search terms — the
-server ships no vocabulary of its own — applied to procedure.
+```json
+{"text": "raccolta rifiuti"}
+```
 
-Two habits are built into all three, because both failures produce an answer that
-looks like a finding and is not one. A requirement is quoted with the file it came
-from, never paraphrased or inferred from what similar tenders usually demand. And
-what could not be retrieved or read is reported separately from what was searched,
-so a shortlist never hides which of its entries were actually checked.
+> `"raccolta rifiuti" — 9 code(s) matched.`
+>
+> `families to search (pass as cpv):`
+> `  905*     6 match(es)  Servizi connessi ai rifiuti urbani e domestici`
+> `  341*     2 match(es)  Veicoli a motore`
+> `  900*     1 match(es)  Servizi fognari, di raccolta dei rifiuti, di pulizia e ambientali`
+>
+> `codes (9 shown):`
+> `  90000000  [division]  Servizi fognari, di raccolta dei rifiuti, di pulizia e ambientali (it)`
+> `  90511000  [class]     Servizi di raccolta di rifiuti (it)`
+
+**The families are the answer; the codes are the evidence for them.** TED matches child
+codes automatically, so `905*` is both broader and likelier to be right than the
+leaves that happened to contain a word — and a family is what someone who knows the
+sector can confirm at a glance.
+
+Search in any language, or several: with no `languages` given all 24 are looked at,
+and every hit reports the one it matched in, so a coincidence across languages is
+visible rather than silent. Accents are folded, so `gestión` and `gestion` are the
+same search. Every word must appear, so a second word narrows.
+
+`{"code": "90511000-2"}` goes the other way: what the code means, and the codes it
+sits under. The check digit is dropped and a short code is padded, because both are
+how people actually write them.
+
+A lookup that finds nothing says which of your words is the problem:
+
+> `"manutenzione verde" — 0 code(s) matched.`
+>
+> `each word on its own:`
+> `  verde                    1 code(s)`
+> `  manutenzione           196 code(s)`
+
+One word is everywhere and the other nowhere, so the phrase needs replacing rather
+than narrowing — CPV files that work under the maintenance of parks. Widening a failed
+search to the codes carrying *some* of the words was built and then removed: over
+9,454 short official phrases an either-or search returns noise however it is ranked,
+and it led with green tea. Noise presented as an answer is worse than nothing, which
+is the same reason `no-text-layer` exists rather than an empty document.
 
 ### `search_tenders` inputs
 
@@ -383,6 +414,31 @@ Notes:
 - A prefix needs at least 2 digits (`55*` is the broadest sensible match).
 - `X`, `x`, and `*` are all accepted as trailing placeholders.
 
+## Prompts
+
+The tools say what this server can fetch. The prompts say how the work is done — and
+they ship with the server, so a procedure written once reaches every client that
+connects rather than being retyped in each one's own format.
+
+| Prompt | Arguments | What it does |
+| --- | --- | --- |
+| `scouting` | `profile` (required), `countries`, `days` | Turns a description of what a company does into CPV families, a search, and a shortlist with deadlines, values and the reason each tender matched. |
+| `qualifica` | `publication_number` (required), `holds` | Go/no-go before anyone writes a bid: pulls the participation requirements out of the disciplinare and tests them against what the company can prove. |
+| `analisi` | `publication_number` (required), `focus` | What winning requires: the scoring grid, what earns each point, the contract terms, and where the bid is decided. |
+
+**None of them names a sector.** What a company does, what it holds and where it bids
+are arguments, so the same three prompts serve a bid office with forty clients across
+forty industries. A test enforces it: writing a CPV code or an industry term into a
+prompt fails the build. The rule is the one
+[`internal/match`](internal/match/match.go) already keeps for search terms — the
+server ships no vocabulary of its own — applied to procedure.
+
+Two habits are built into all three, because both failures produce an answer that
+looks like a finding and is not one. A requirement is quoted with the file it came
+from, never paraphrased or inferred from what similar tenders usually demand. And
+what could not be retrieved or read is reported separately from what was searched,
+so a shortlist never hides which of its entries were actually checked.
+
 ## Build
 
 Requires Go 1.25+.
@@ -531,7 +587,9 @@ Makefile                 development targets (make dev, check, image)
 .air.toml                live-reload configuration
 Dockerfile               two-stage build onto a distroless base
 main.go                  server setup, stdio and HTTP transports
+prompts.go               the scouting/qualifica/analisi procedures, as MCP prompts
 tools.go                 search/scan tool definitions and handlers
+cpv_tools.go             lookup_cpv: the vocabulary, and its rendering
 dossier_tools.go         dossier, document-fetch and ANAC tool handlers
 docscan_tools.go         scan_tender_documents: searching inside the tender documents
 documents.go             retrieving a tender's documents, shared by both tools
@@ -545,6 +603,7 @@ internal/ted/eforms.go   eForms parsing for award criteria, languages, term matc
 internal/ted/dossier.go  eForms parsing for parties, lots, deadlines, link roles
 internal/ted/cache.go    on-disk cache of notice documents
 internal/match/          per-language and paired-root text matching
+internal/cpv/            the CPV vocabulary, embedded, searchable by name
 internal/webdoc/         robots.txt-respecting document retrieval and link discovery
 internal/doctext/        text extraction from PDF, ZIP, DOCX/XLSX/ODF and .p7m
 internal/anac/           ANAC open-data snapshot lookup by codice fiscale
@@ -564,6 +623,11 @@ internal/anac/           ANAC open-data snapshot lookup by codice fiscale
   a deterministic fallback to other languages.
 - For deep pagination beyond what `page`/`limit` allow, refine the query with more
   filters rather than paging very far.
+- The CPV vocabulary is embedded (2.4 MB compressed, ~2.5 MB on the binary), taken
+  from the MIT-licensed [`cpv-eu`](https://www.npmjs.com/package/cpv-eu); the
+  vocabulary itself is Commission Regulation (EC) No 213/2008. It is decompressed on
+  first use, so a server that never looks a code up never pays for it. See
+  [`internal/cpv/doc.md`](internal/cpv/doc.md) to regenerate it.
 - Text extraction adds one dependency,
   [`github.com/ledongthuc/pdf`](https://github.com/ledongthuc/pdf) (BSD, pure Go, no
   cgo — the image stays a static binary on distroless). Everything else — ZIP, the

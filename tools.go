@@ -17,6 +17,17 @@ import (
 // registerTools wires all tedmcp tools onto the MCP server.
 func registerTools(s *mcp.Server, tc *ted.Client, wc *webdoc.Client) {
 	mcp.AddTool(s, &mcp.Tool{
+		Name: "lookup_cpv",
+		Description: "Find the CPV codes that describe a kind of work, by searching the vocabulary's own names in any of the 24 official EU languages. " +
+			"Use this BEFORE search_tenders or scan_tenders whenever the right codes are not already known — which, across sectors, is most of the time. " +
+			"Choosing the CPV wrong is the way a procurement search fails silently: a wrong or over-narrow family returns an empty list, and an empty list " +
+			"is indistinguishable from 'there are no such tenders'. Returns the individual codes and, more usefully, the 3-digit families they fall into " +
+			"with the exact value to pass as a cpv filter. Prefer the family: TED matches child codes automatically, so a full 8-digit code is nearly " +
+			"always narrower than intended. It can also explain one code (pass code=) and show what it sits under. The vocabulary is built in, so this " +
+			"costs no network request.",
+	}, handleLookupCPV())
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name: "search_tenders",
 		Description: "Search the EU public procurement journal TED (Tenders Electronic Daily) for tenders/procurement notices. " +
 			"Filter by free-text keywords, CPV codes, buyer country, notice type, publication date, and submission deadline. " +

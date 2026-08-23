@@ -92,8 +92,10 @@ Only tenders whose deadline is at least %s days away.
 
 Work in this order. Each step is cheaper than the one after it, so do not skip ahead.
 
-1. CPV FAMILIES. Turn the profile into CPV families and write down which ones you
-   chose and why, before searching. Choose at 3 digits, not 8: TED matches child
+1. CPV FAMILIES. Call lookup_cpv with words from the profile — in the buyer country's
+   language as well as your own, since the vocabulary is indexed in all 24 — and take
+   the families it returns. Do not guess codes from memory. Write down which families
+   you chose and why, before searching. Choose at 3 digits, not 8: TED matches child
    codes automatically, so a full code is almost always too narrow, and a wrong or
    over-narrow family returns nothing — which reads exactly like "there are no
    tenders". This is the single most likely way this whole exercise fails silently.
