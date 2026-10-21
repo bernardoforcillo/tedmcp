@@ -4,6 +4,7 @@ locals {
     "cloudbuild.googleapis.com",
     "run.googleapis.com",
     "iam.googleapis.com",
+    "dns.googleapis.com",
   ]
 
   registry = "${var.registry_region}-docker.pkg.dev/${var.project_id}/${var.service_name}"
@@ -176,4 +177,35 @@ resource "google_cloudbuild_trigger" "main" {
     google_project_service.enabled,
     google_project_iam_member.build_logs,
   ]
+}
+
+# --- domain --------------------------------------------------------------
+
+# The domain must be verified for the account running tofu (Search Console).
+# The CNAME below points it at Cloud Run; Google issues the certificate once
+# the record resolves.
+resource "google_cloud_run_domain_mapping" "domain" {
+  location = google_cloud_run_v2_service.tenders_mcp.location
+  name     = var.domain
+
+  metadata {
+    namespace = var.project_id
+  }
+
+  spec {
+    route_name = google_cloud_run_v2_service.tenders_mcp.name
+  }
+}
+
+# The zone already exists and is not managed here.
+data "google_dns_managed_zone" "zone" {
+  name = var.dns_zone
+}
+
+resource "google_dns_record_set" "domain" {
+  managed_zone = data.google_dns_managed_zone.zone.name
+  name         = "${var.domain}."
+  type         = "CNAME"
+  ttl          = 300
+  rrdatas      = ["ghs.googlehosted.com."]
 }

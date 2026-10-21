@@ -9,3 +9,8 @@ output "image_repository" {
 output "runtime_service_account" {
   value = google_service_account.runtime.email
 }
+
+output "domain_dns_records" {
+  description = "Records to create at the DNS provider for var.domain."
+  value       = google_cloud_run_domain_mapping.domain.status[0].resource_records
+}

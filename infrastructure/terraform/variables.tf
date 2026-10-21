@@ -46,3 +46,15 @@ variable "max_instances" {
   type    = number
   default = 2
 }
+
+variable "domain" {
+  description = "Custom domain mapped to the service."
+  type        = string
+  default     = "tenders.tools.bernardoforcillo.com"
+}
+
+variable "dns_zone" {
+  description = "Existing Cloud DNS managed zone that holds var.domain."
+  type        = string
+  default     = "bernardoforcillo-com"
+}
