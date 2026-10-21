@@ -1,0 +1,38 @@
+# Build the image, push it to Artifact Registry, roll it out on Cloud Run.
+# Substitutions come from the trigger in infrastructure/terraform/main.tf.
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    env: ["DOCKER_BUILDKIT=1"]
+    # The Dockerfile runs `go test ./...`, so a red test fails the build here.
+    args:
+      - build
+      - --tag=${_REGISTRY}/tenders-mcp:${COMMIT_SHA}
+      - --tag=${_REGISTRY}/tenders-mcp:latest
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "--all-tags", "${_REGISTRY}/tenders-mcp"]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --region=${_REGION}
+      - --image=${_REGISTRY}/tenders-mcp:${COMMIT_SHA}
+      - --service-account=${_RUNTIME}
+      - --port=8080
+      - --args=-http,0.0.0.0:8080,-cache-dir,/var/cache/tedmcp
+
+images:
+  - ${_REGISTRY}/tenders-mcp:${COMMIT_SHA}
+
+options:
+  # Required when the build runs as a user-specified service account.
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s
