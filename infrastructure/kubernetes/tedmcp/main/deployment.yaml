@@ -26,7 +26,17 @@ spec:
           # Image published by .github/workflows/ci.yml; tag rewritten by
           # Flux image automation (see update.yaml).
           image: bernardoforcillo/tedmcp:latest # {"$imagepolicy": "tedmcp:tedmcp-image-policy"}
-          args: ["-http", ":8080", "-cache-dir", "/var/cache/tedmcp"]
+          args: ["-http", ":8080", "-cache-dir", "/var/cache/tedmcp", "-data-dir", "/var/lib/tedmcp"]
+          env:
+            # Bearer tokens for the team, "name:token,name:token". Optional so
+            # the server still starts without the secret — but then the
+            # endpoint is open to anyone who can reach the ingress.
+            - name: TEDMCP_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: tedmcp-auth
+                  key: tokens
+                  optional: true
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -58,7 +68,12 @@ spec:
           volumeMounts:
             - name: cache
               mountPath: /var/cache/tedmcp
+            - name: data
+              mountPath: /var/lib/tedmcp
       volumes:
         - name: cache
           persistentVolumeClaim:
             claimName: tedmcp-cache
+        - name: data
+          persistentVolumeClaim:
+            claimName: tedmcp-data

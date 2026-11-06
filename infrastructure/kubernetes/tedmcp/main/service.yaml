@@ -23,3 +23,17 @@ spec:
   resources:
     requests:
       storage: 2Gi
+---
+# The team's saved searches, shortlist and term packs. Small, but not
+# regenerable like the cache: back it up.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tedmcp-data
+  namespace: tedmcp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

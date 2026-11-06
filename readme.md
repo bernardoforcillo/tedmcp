@@ -24,6 +24,30 @@ needs **no API key**.
 | `get_tender` | Fetch one notice by its `publication_number` (e.g. `519405-2026`) with all raw fields and PDF/XML/HTML links. |
 | `get_tender_document` | Download a notice's file. `format=xml` (default) returns the machine-readable eForms content as text; `pdf`/`html` return the URL and metadata. This is how you read the full procurement text. |
 
+For qualifying tenders and knowing the market:
+
+| Tool | What it does |
+| --- | --- |
+| `extract_requirements` | The **go/no-go sheet**: reads a tender's documents and returns, per requirement, the value stated, the passage and the file — turnover, references, certifications, SOA, guarantees, compulsory site visit, questions deadline, subcontracting, avvalimento, lot limits, duration, social clause, CAM, penalties, ANAC fee. |
+| `get_procedure_history` | Every notice of one procurement, in order — linked by the eForms procedure identifier — with deadline moves, change notices and the outcome. |
+| `award_history` | **Competitive intelligence** from award notices: who wins, against how many bids, at what discount; ranks competitors and profiles buyers. |
+| `forecast_retenders` | Contracts **ending soon**, read from award notices' durations, with the incumbent and the value — leads months before the contract notice. |
+
+For working as a team — stored on the server, shared by everyone using it:
+
+| Tool | What it does |
+| --- | --- |
+| `save_search` · `run_saved_search` · `list_saved_searches` · `delete_saved_search` | Searches saved once and run every morning; a run reports **only what is new**. |
+| `shortlist_add` · `shortlist_update` · `shortlist_list` · `shortlist_remove` | One shortlist with a status, an owner and dated notes per tender. |
+| `export_calendar` | Submission and question deadlines as an **.ics** file, at the right instant in every time zone. |
+| `save_term_pack` · `list_term_packs` · `delete_term_pack` | Curated per-language vocabularies, usable by name (`term_pack`) in both scans. |
+
+Plus five **prompts** — `go_no_go`, `competitor_brief`, `retender_pipeline`,
+`cross_border_sweep`, `morning_digest` — and **resources** for the shortlist (JSON and
+iCalendar), the saved searches and the term packs. `search_tenders`,
+`award_history`, `forecast_retenders` and `shortlist_list` take `format=csv` to attach
+a spreadsheet-ready export.
+
 ### `search_tenders` inputs
 
 All optional, but you must supply at least one filter (or a raw `query`):
@@ -335,6 +359,139 @@ not present itself as a web browser, and this server will not pretend to be one.
 the file in a browser and pass its path. The archives are incremental, so a gara
 published after the snapshot date will not be in it yet.
 
+### `extract_requirements` — the qualification sheet
+
+The questions a bid team asks of every tender are the same, and the answers are in
+the disciplinare rather than the notice: what turnover is demanded, which references,
+which certifications, how large the guarantee is, whether the site visit is
+compulsory, when questions close. Finding them by reading forty pages per tender is
+the slowest part of qualifying a pipeline.
+
+`extract_requirements` reads the tender's documents once — the same retrieval as
+`fetch_tender_documents`, so the same robots.txt rules and the same honesty about
+refusals — and answers each question with the value stated, the passage and the file:
+
+```json
+{"publication_number": "442511-2026"}
+```
+
+> **■ Minimum turnover**: € 1.500.000,00
+> `    disciplinare.pdf: …un fatturato globale minimo annuo … non inferiore a € 1.500.000,00 IVA esclusa…`
+> **■ Site visit**: 10/08/2026  [mandatory]
+> **■ Deadline for questions / clarifications**: 14/08/2026
+
+The notice's own facts come first — submission deadline with its time of day, the
+deadline for questions, the opening session, the duration and renewal options — and
+need no document at all.
+
+The built-in checks are phrased the way Italian, English, French, German and Spanish
+tender documents phrase them, as whole words and set phrases rather than stems. Teams
+add their own with `custom_checks` (`terms_by_language` or `regex`, plus what to
+`extract`: amount, percent, date, duration, codes). Three things are kept apart in the
+output, for the same reason as in the scans: requirements found, requirements **not
+found in the documents read**, and the documents that were not read at all.
+
+### `get_procedure_history` — is this still the current notice?
+
+A notice is a snapshot. The deadline may have been extended last week, a lot
+cancelled, the procedure awarded. eForms gives every notice of one procurement the
+same procedure identifier, and TED can search by it, so the whole sequence comes back
+in one call, with what changed:
+
+> Procedure ccc10029-… — 3 notice(s), status: awarded
+>   ! 561293-2024 is not the latest notice of this procedure: 2 later notice(s) follow it
+>   ! Deadline moved from 2024-10-21 12:00 (561293-2024) to 2024-11-04 12:00 (600000-2024)
+
+Notices from before eForms (November 2023) carry no procedure identifier; the tool says
+so rather than returning a history of one.
+
+### `award_history` — who wins, at what price
+
+Award notices are the most under-read part of TED. Their results section says who won
+each lot, against how many rival bids, and for how much — read in bulk, that is the
+competitive picture of a market:
+
+```json
+{"cpv": ["555*"], "country": ["ITA"], "published_from": "2024-01-01"}
+```
+
+The output ranks **competitors** (wins, value awarded, the buyers they win repeatedly,
+typical number of rivals, sole-bidder wins, median discount), profiles **buyers** (how
+many bids they attract, whether they keep the same supplier) and gives the **market**
+view (median bids per lot, single-bid share, median discount). `winner` follows one
+competitor; `buyer` narrows to one contracting authority. Operators are identified by
+their registration number when the notice gives one, so "CIRFOOD S.C." and "Cirfood
+Soc. Coop." are one competitor.
+
+Discounts compare the award with the buyer's estimate, which often includes options and
+renewals, so they are an upper bound; values that obviously measure different things
+are left out rather than reported as a negative discount.
+
+### `forecast_retenders` — leads before the notice exists
+
+The same award notices say how long each contract runs, which is when it will be
+tendered again. eForms has a field for it, and half of all notices leave it empty and
+write the period into the title — `PERIODO dal 01/01/2027 al 31/12/2028`,
+`GENNAIO 2026-AGOSTO 2029`. Both are read, and each end date says where it came from:
+`notice` (the planned period), `text` (dates in the title or description) or `derived`
+(a stated span from the contract date). Renewal options written as prose ("Eventuale
+rinnovo di 12 mesi", "ulteriori 4 anni scolastici") give a second end date.
+
+```json
+{"cpv": ["555*"], "country": ["ITA"], "ends_to": "2028-06-30", "include_pins": true}
+```
+
+Each contract comes with its incumbent, its value and a `watch_from` date nine months
+before the end. Lots whose duration cannot be read are **counted** as undated rather
+than dropped, and `include_pins` adds the prior information notices published in the
+last year — buyers announcing upcoming tenders.
+
+### Team tools
+
+Everything above answers a question in one conversation. The team tools keep the
+answers between conversations, on the server, shared by everyone who uses it:
+
+- **Saved searches.** `save_search` stores `search_tenders` filters under a name;
+  `run_saved_search` runs it and reports only the notices it has not shown before.
+  `name: "*"` runs every saved search — the morning digest.
+- **Shortlist.** `shortlist_add` records a tender with a status (`watching`,
+  `qualifying`, `bidding`, `submitted`, `won`, `lost`, `dropped`), an owner and a note,
+  and reads the notice once for its deadline with time of day and offset and its
+  questions deadline. `shortlist_list` sorts by deadline and flags anything closing
+  within a week.
+- **Calendar.** `export_calendar` writes those deadlines to an `.ics` file with
+  reminders. An 08:00 deadline at `+02:00` becomes 06:00 UTC, so it lands at the right
+  moment in every team member's calendar; a deadline without a stated time becomes an
+  all-day event rather than an invented hour.
+- **Term packs.** A cross-border search that took an afternoon to get right —
+  `terms_by_language` for eight languages plus a `near` pair — is saved with
+  `save_term_pack` and reused by anyone with `term_pack: "food-waste"` in
+  `scan_tenders` or `scan_tender_documents`.
+
+The data is one JSON file, `team.json`, written atomically on every change:
+
+```sh
+tedmcp -data-dir /path/to/data   # default .tenders/data; "off" keeps it in memory
+```
+
+The directory is chosen by the flag, then `TEDMCP_DATA_DIR`. Unlike the cache it is
+not regenerable — back it up. A file that cannot be read stops the server instead of
+being silently replaced by an empty shortlist. One process writes it, so run one
+replica.
+
+### Prompts
+
+The prompts package the standard workflows, so a junior analyst runs the same sequence
+a senior one would, with the caveats stated up front:
+
+| Prompt | Arguments | What it runs |
+| --- | --- | --- |
+| `go_no_go` | `publication_number`, `company_profile` | history → dossier → requirements → award history for the buyer and market → requirement-by-requirement fit → recommendation and questions for the buyer |
+| `competitor_brief` | `competitor`, `cpv`, `country` | award history filtered to the competitor, its incumbencies, and the contracts it will be defending |
+| `retender_pipeline` | `cpv`, `country`, `months` | forecast grouped by quarter, undated contracts, prior information notices, saved searches for the buyers ending soonest |
+| `cross_border_sweep` | `requirement`, `cpv`, `countries`, `term_pack` | per-language terms → scan_tenders → scan_tender_documents → three lists kept apart → save the terms as a pack |
+| `morning_digest` | — | all saved searches, shortlist deadlines this week, changes to tenders being qualified |
+
 ### Advanced CPV matching
 
 The `cpv` filter accepts exact codes and trailing-wildcard prefixes, mixed freely
@@ -393,8 +550,11 @@ Two things worth knowing:
   cache dies with the container.
 - **`0.0.0.0` inside, loopback outside.** The process must bind `0.0.0.0` for a
   published port to reach it; keep the exposure on the host side with
-  `-p 127.0.0.1:8080:8080`. The server has no authentication — anything that can
-  reach the port can run the tools.
+  `-p 127.0.0.1:8080:8080`, or set `TEDMCP_TOKENS` (see
+  [Authentication](#authentication)) — without tokens, anything that can reach the
+  port can run the tools.
+- **Team data lives in `/var/lib/tedmcp`.** Mount a second volume there (`make up`
+  does); without it the shortlist dies with the container.
 
 ## Development
 
@@ -474,9 +634,33 @@ Two protections apply, and both are worth knowing before you change the address:
   with a non-loopback `Host` header gets 403.
 
 Neither is authentication. `-http 127.0.0.1:8080` keeps the listener on the loopback
-interface; binding `:8080` exposes it to anything that can reach the host, and the
-tools will happily run for whoever connects. Put it behind a reverse proxy that
-authenticates if it needs to leave the machine.
+interface; binding `:8080` exposes it to anything that can reach the host. Before it
+leaves the machine, configure tokens.
+
+### Authentication
+
+With the team tools, an open endpoint means anyone who finds it can rewrite the
+shortlist. Give each member of the team a bearer token:
+
+```sh
+TEDMCP_TOKENS="giulia:$(openssl rand -hex 24),marco:$(openssl rand -hex 24)" tedmcp -http :8080
+# or one "name token" pair per line in a file:
+tedmcp -http :8080 -tokens-file /etc/tedmcp/tokens
+```
+
+When any token is configured, every request to `/mcp` must carry
+`Authorization: Bearer <token>`; `/healthz` and `/` stay open. Tokens must be at least
+16 characters, are compared by digest in constant time, and the name each one belongs
+to is recorded on saved searches, shortlist notes and term packs. Clients pass the
+header:
+
+```sh
+claude mcp add --transport http tedmcp https://tedmcp.example.org/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+This is deliberately not OAuth: a team of analysts behind one ingress needs the open
+endpoint shut and a name on each request, not an authorization server.
 
 ## Example
 
@@ -509,6 +693,13 @@ main.go                  server setup, stdio and HTTP transports
 tools.go                 search/scan tool definitions and handlers
 dossier_tools.go         dossier, document-fetch and ANAC tool handlers
 docscan_tools.go         scan_tender_documents: searching inside the tender documents
+requirements_tools.go    extract_requirements: the go/no-go qualification sheet
+history_tools.go         get_procedure_history: every notice of one procurement
+awards_tools.go          award_history and forecast_retenders
+team_tools.go            saved searches, shortlist, calendar, term packs, resources
+prompts.go               the workflow prompts
+auth.go                  bearer tokens for the HTTP transport
+common.go                notice selection, procedure reading, CSV export
 documents.go             retrieving a tender's documents, shared by both tools
 format.go                human-readable result rendering
 dossier_format.go        rendering for the dossier/fetch/ANAC results
@@ -518,11 +709,15 @@ internal/ted/query.go    expert-query builder
 internal/ted/notice.go   notice field flattening + summaries
 internal/ted/eforms.go   eForms parsing for award criteria, languages, term matching
 internal/ted/dossier.go  eForms parsing for parties, lots, deadlines, link roles
+internal/ted/procedure.go eForms results: winners, bids, values, changes, lot terms
+internal/ted/duration.go contract periods from the notice or from its wording
 internal/ted/cache.go    on-disk cache of notice documents
 internal/match/          per-language and paired-root text matching
 internal/webdoc/         robots.txt-respecting document retrieval and link discovery
 internal/doctext/        text extraction from PDF, ZIP, DOCX/XLSX/ODF and .p7m
 internal/anac/           ANAC open-data snapshot lookup by codice fiscale
+internal/requirements/   requirement checks and value extraction for tender documents
+internal/store/          the team's saved searches, shortlist and term packs
 ```
 
 ## Notes

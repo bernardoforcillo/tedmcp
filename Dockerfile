@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # The cache directory is created here, with its ownership already right: the
 # runtime image has no shell to mkdir with and no entrypoint script to chown.
-RUN install -d -m 0755 -o 65532 -g 65532 /out/cache
+RUN install -d -m 0755 -o 65532 -g 65532 /out/cache /out/data
 
 # --- run -----------------------------------------------------------------
 # distroless/static carries CA certificates — needed to reach TED over HTTPS —
@@ -33,6 +33,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/tedmcp /usr/local/bin/tedmcp
 COPY --from=build --chown=65532:65532 /out/cache /var/cache/tedmcp
+COPY --from=build --chown=65532:65532 /out/data /var/lib/tedmcp
 
 # The AGPL is conveyed with the program, so the licence travels inside the
 # image rather than being left behind in the repository.
@@ -43,6 +44,10 @@ COPY --from=build /src/license.md /usr/local/share/tedmcp/license.md
 # one takes seconds.
 VOLUME ["/var/cache/tedmcp"]
 
+# The team's saved searches, shortlist and term packs. Unlike the cache this
+# is not regenerable: mount it, and back it up.
+VOLUME ["/var/lib/tedmcp"]
+
 EXPOSE 8080
 USER nonroot:nonroot
 
@@ -52,6 +57,6 @@ ENTRYPOINT ["/usr/local/bin/tedmcp"]
 # process (docker run -i, with the arguments overridden).
 #
 # Binding 0.0.0.0 is what lets a published port reach the process; keep the
-# exposure on the host side instead — `-p 127.0.0.1:8080:8080`. The server
-# has no authentication of its own.
-CMD ["-http", "0.0.0.0:8080", "-cache-dir", "/var/cache/tedmcp"]
+# exposure on the host side instead — `-p 127.0.0.1:8080:8080` — or set
+# TEDMCP_TOKENS (name:token,…) so the endpoint requires a bearer token.
+CMD ["-http", "0.0.0.0:8080", "-cache-dir", "/var/cache/tedmcp", "-data-dir", "/var/lib/tedmcp"]

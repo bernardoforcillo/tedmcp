@@ -9,13 +9,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/bernardoforcillo/tedmcp/internal/match"
+	"github.com/bernardoforcillo/tedmcp/internal/store"
 	"github.com/bernardoforcillo/tedmcp/internal/ted"
 	"github.com/bernardoforcillo/tedmcp/internal/webdoc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // registerTools wires all tedmcp tools onto the MCP server.
-func registerTools(s *mcp.Server, tc *ted.Client, wc *webdoc.Client) {
+func registerTools(s *mcp.Server, tc *ted.Client, wc *webdoc.Client, st *store.Store) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "search_tenders",
 		Description: "Search the EU public procurement journal TED (Tenders Electronic Daily) for tenders/procurement notices. " +
@@ -67,7 +68,7 @@ func registerTools(s *mcp.Server, tc *ted.Client, wc *webdoc.Client) {
 			"another's text. Downloading a tender's documents is many requests to a small server, so it searches a few tenders per call, not a page " +
 			"of them: use scan_tenders to narrow the field first, then this on the survivors. Read the not-searched lists before concluding " +
 			"anything from a nil result: a document behind a captcha and a document that says nothing look identical in a count.",
-	}, handleScanDocuments(tc, wc))
+	}, handleScanDocuments(tc, wc, st))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "lookup_anac",
@@ -89,7 +90,7 @@ func registerTools(s *mcp.Server, tc *ted.Client, wc *webdoc.Client) {
 			"compositionally rather than as a set phrase. " +
 			"Give it either `publication_numbers` or the same search filters as search_tenders, and it does the search, the bulk download, and the matching in one call. " +
 			"Documents are cached on disk, so re-running a scan with different terms costs almost nothing.",
-	}, handleScan(tc))
+	}, handleScan(tc, st))
 }
 
 // --- search_tenders ---
@@ -109,6 +110,7 @@ type SearchInput struct {
 	SortBy        string   `json:"sort_by,omitempty" jsonschema:"field to sort by (default publication-date)"`
 	SortOrder     string   `json:"sort_order,omitempty" jsonschema:"ASC or DESC (default DESC)"`
 	Scope         string   `json:"scope,omitempty" jsonschema:"ALL, LATEST, or ACTIVE (default ALL)"`
+	Format        string   `json:"format,omitempty" jsonschema:"text (default) or csv: csv also attaches the results as a spreadsheet-ready CSV file"`
 }
 
 type SearchOutput struct {
@@ -122,64 +124,76 @@ type SearchOutput struct {
 
 func handleSearch(tc *ted.Client) func(context.Context, *mcp.CallToolRequest, SearchInput) (*mcp.CallToolResult, SearchOutput, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in SearchInput) (*mcp.CallToolResult, SearchOutput, error) {
-		limit := in.Limit
-		if limit <= 0 {
-			limit = 20
-		}
-		if limit > 250 {
-			limit = 250
-		}
-		page := in.Page
-		if page <= 0 {
-			page = 1
-		}
-		scope := strings.ToUpper(strings.TrimSpace(in.Scope))
-		if scope == "" {
-			scope = "ALL"
-		}
-
-		query, err := ted.BuildQuery(ted.SearchFilters{
-			Query:         in.Query,
-			Keywords:      in.Keywords,
-			CPV:           in.Cpv,
-			Country:       in.Country,
-			NoticeType:    in.NoticeType,
-			PublishedFrom: in.PublishedFrom,
-			PublishedTo:   in.PublishedTo,
-			DeadlineFrom:  in.DeadlineFrom,
-			DeadlineTo:    in.DeadlineTo,
-			SortBy:        in.SortBy,
-			SortOrder:     in.SortOrder,
-		})
+		out, err := runSearch(ctx, tc, in)
 		if err != nil {
 			return errorResult(err), SearchOutput{}, nil
 		}
-
-		resp, err := tc.Search(ctx, ted.SearchRequest{
-			Query:          query,
-			Fields:         ted.SummaryFields,
-			Page:           page,
-			Limit:          limit,
-			Scope:          scope,
-			PaginationMode: "PAGE_NUMBER",
-		})
-		if err != nil {
-			return errorResult(err), SearchOutput{}, nil
+		if wantsCSV(in.Format) {
+			return csvResult(formatSearch(out), "search", searchCSV(out.Notices)), out, nil
 		}
-
-		out := SearchOutput{
-			Query: query,
-			Total: resp.TotalNoticeCount,
-			Page:  page,
-			Limit: limit,
-		}
-		for _, n := range resp.Notices {
-			out.Notices = append(out.Notices, n.Summary())
-		}
-		out.Count = len(out.Notices)
-
 		return textResult(formatSearch(out)), out, nil
 	}
+}
+
+// runSearch executes a search_tenders request. Saved searches run through it
+// too, so a search saved by one analyst means exactly what it meant to them.
+func runSearch(ctx context.Context, tc *ted.Client, in SearchInput) (SearchOutput, error) {
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 250 {
+		limit = 250
+	}
+	page := in.Page
+	if page <= 0 {
+		page = 1
+	}
+	scope := strings.ToUpper(strings.TrimSpace(in.Scope))
+	if scope == "" {
+		scope = "ALL"
+	}
+
+	query, err := ted.BuildQuery(ted.SearchFilters{
+		Query:         in.Query,
+		Keywords:      in.Keywords,
+		CPV:           in.Cpv,
+		Country:       in.Country,
+		NoticeType:    in.NoticeType,
+		PublishedFrom: in.PublishedFrom,
+		PublishedTo:   in.PublishedTo,
+		DeadlineFrom:  in.DeadlineFrom,
+		DeadlineTo:    in.DeadlineTo,
+		SortBy:        in.SortBy,
+		SortOrder:     in.SortOrder,
+	})
+	if err != nil {
+		return SearchOutput{}, err
+	}
+
+	resp, err := tc.Search(ctx, ted.SearchRequest{
+		Query:          query,
+		Fields:         ted.SummaryFields,
+		Page:           page,
+		Limit:          limit,
+		Scope:          scope,
+		PaginationMode: "PAGE_NUMBER",
+	})
+	if err != nil {
+		return SearchOutput{}, err
+	}
+
+	out := SearchOutput{
+		Query: query,
+		Total: resp.TotalNoticeCount,
+		Page:  page,
+		Limit: limit,
+	}
+	for _, n := range resp.Notices {
+		out.Notices = append(out.Notices, n.Summary())
+	}
+	out.Count = len(out.Notices)
+	return out, nil
 }
 
 // --- get_tender ---
@@ -316,6 +330,7 @@ type ScanInput struct {
 	TermsByLanguage map[string][]string `json:"terms_by_language,omitempty" jsonschema:"terms keyed by the language they belong to (ISO 639-2/T, e.g. ITA, DEU, BUL; * means any language). Each notice is matched only against the terms of the language it declares, which is what stops one language's word stem from colliding with another's ordinary vocabulary. Strongly preferred over terms or regex for any search spanning more than one country"`
 	Near            *match.Near         `json:"near,omitempty" jsonschema:"match two groups of roots appearing close together, for requirements written compositionally rather than as a set phrase (e.g. a food root near a waste root catches both 'food waste' and 'Minimizing Waste Generation ... Food'). Keyed by language like terms_by_language"`
 	Regex           string              `json:"regex,omitempty" jsonschema:"regular expression to match instead of terms (RE2 syntax, case-insensitive unless it sets its own flags). Applied to every notice regardless of language, so short stems will collide across languages"`
+	TermPack        string              `json:"term_pack,omitempty" jsonschema:"name of a saved term pack (see list_term_packs) whose terms are added to terms_by_language and near"`
 
 	PublicationNumbers []string `json:"publication_numbers,omitempty" jsonschema:"scan these notices directly, e.g. [\"478044-2026\",\"517698-2026\"]. When omitted, the search filters below select the notices to scan"`
 
@@ -373,8 +388,11 @@ type ScanOutput struct {
 	Cache     ted.CacheStats `json:"cache,omitzero" jsonschema:"how many notice documents came from the local cache rather than the network"`
 }
 
-func handleScan(tc *ted.Client) func(context.Context, *mcp.CallToolRequest, ScanInput) (*mcp.CallToolResult, ScanOutput, error) {
+func handleScan(tc *ted.Client, st *store.Store) func(context.Context, *mcp.CallToolRequest, ScanInput) (*mcp.CallToolResult, ScanOutput, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ScanInput) (*mcp.CallToolResult, ScanOutput, error) {
+		if err := applyTermPack(st, in.TermPack, &in.TermsByLanguage, &in.Near); err != nil {
+			return errorResult(err), ScanOutput{}, nil
+		}
 		matcher, err := buildMatcher(in.Terms, in.TermsByLanguage, in.Near, in.Regex)
 		if err != nil {
 			return errorResult(err), ScanOutput{}, nil

@@ -7,13 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bernardoforcillo/tedmcp/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	server := mcp.NewServer(&mcp.Implementation{Name: "tedmcp", Version: "test"}, nil)
-	return mcpHandler(server)
+	return mcpHandler(server, nil)
 }
 
 const initializeRequest = `{"jsonrpc":"2.0","id":1,"method":"initialize",` +
@@ -84,8 +85,9 @@ func TestHTTPHealthAndRoot(t *testing.T) {
 func TestHTTPToolsAreRegistered(t *testing.T) {
 	// The tools must be reachable over HTTP exactly as over stdio.
 	server := mcp.NewServer(&mcp.Implementation{Name: "tedmcp", Version: "test"}, nil)
-	registerTools(server, nil, nil)
-	h := mcpHandler(server)
+	team, _ := store.Open(store.Disabled)
+	registerAll(server, nil, nil, team)
+	h := mcpHandler(server, nil)
 
 	rec := postMCP(t, h, initializeRequest, nil)
 	if rec.Code != http.StatusOK {
@@ -104,7 +106,9 @@ func TestHTTPToolsAreRegistered(t *testing.T) {
 		t.Fatalf("tools/list failed: %d %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, name := range []string{"search_tenders", "scan_tenders", "get_tender_dossier"} {
+	for _, name := range []string{"search_tenders", "scan_tenders", "get_tender_dossier", "extract_requirements",
+		"get_procedure_history", "award_history", "forecast_retenders", "save_search", "run_saved_search",
+		"shortlist_add", "shortlist_list", "export_calendar", "save_term_pack"} {
 		if !strings.Contains(body, name) {
 			t.Errorf("tool %s missing from the HTTP transport", name)
 		}

@@ -34,8 +34,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bernardoforcillo/tedmcp/internal/store"
 	"github.com/bernardoforcillo/tedmcp/internal/ted"
 	"github.com/bernardoforcillo/tedmcp/internal/webdoc"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -59,8 +61,37 @@ Tools:
 - get_tender: fetch one notice by its publication number (e.g. 521055-2026).
 - get_tender_document: download a notice's file (xml full text, or pdf/html link).
 
+For qualifying a tender and knowing the market:
+- extract_requirements: the go/no-go sheet — turnover, references, certifications,
+  guarantees, site visit, questions deadline and more, each with its value, the
+  passage and the file, read from the tender's own documents.
+- get_procedure_history: every notice of the same procurement, in order, with the
+  deadline moves, change notices and outcome. Check it before investing in a bid.
+- award_history: who wins which tenders, against how many bids, at what discount;
+  ranks competitors and profiles buyers from award notices.
+- forecast_retenders: contracts ending soon (from award notices' durations), with
+  the incumbent — the earliest a lead can be known.
+
+For working as a team (stored on the server, shared by everyone using it):
+- save_search / run_saved_search / list_saved_searches / delete_saved_search:
+  searches run every morning, reporting only what is new.
+- shortlist_add / shortlist_update / shortlist_list / shortlist_remove: one
+  shortlist with status, owner and notes per tender.
+- export_calendar: submission and question deadlines as an .ics file.
+- save_term_pack / list_term_packs / delete_term_pack: curated per-language terms,
+  usable by name (term_pack) in scan_tenders and scan_tender_documents.
+Prompts (go_no_go, competitor_brief, retender_pipeline, cross_border_sweep,
+morning_digest) package the standard workflows. Several tools take format=csv to
+attach a spreadsheet export.
+
 Typical flow: search_tenders to find notices, then get_tender_dossier to understand
-one, then fetch_tender_documents to read its capitolato.
+one, then fetch_tender_documents to read its capitolato — or extract_requirements to
+go straight to the qualification sheet.
+
+Award data has limits worth stating: discounts compare with the buyer's estimate,
+which often includes options; award notices from before eForms (November 2023)
+carry no structured results; and a contract end read from a title is the buyer's
+own wording, often extended later by a proroga no notice records.
 
 The two scans answer different questions and cost very different amounts.
 scan_tenders reads notices from TED: cheap, cached, and good for sweeping a hundred
@@ -141,6 +172,12 @@ func main() {
 	httpAddr := flag.String("http", "",
 		"serve MCP over HTTP on this address (e.g. 127.0.0.1:8080) instead of stdio; "+
 			"the endpoint is "+mcpPath)
+	dataDir := flag.String("data-dir", "",
+		"where to keep the team's saved searches, shortlist and term packs (default "+store.DefaultDir+
+			"; \"off\" keeps them in memory; overrides TEDMCP_DATA_DIR)")
+	tokensFile := flag.String("tokens-file", "",
+		"file of \"name token\" lines; when it (or TEDMCP_TOKENS) names any token, HTTP requests must carry "+
+			"one as a bearer token (overrides TEDMCP_TOKENS_FILE)")
 	flag.Parse()
 
 	client := ted.NewClient()
@@ -155,6 +192,17 @@ func main() {
 	}
 	client.Cache = cache
 
+	// The team store, unlike the cache, is not disposable: a file that cannot
+	// be read is a reason to stop, not to start over with an empty shortlist.
+	team, err := store.Open(*dataDir)
+	if err != nil {
+		log.Fatalf("tedmcp: %v", err)
+	}
+	tokens, err := loadTokens(*tokensFile)
+	if err != nil {
+		log.Fatalf("tedmcp: %v", err)
+	}
+
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "tedmcp",
 		Title:   "TED tenders search",
@@ -163,7 +211,7 @@ func main() {
 		Instructions: serverInstructions,
 	})
 
-	registerTools(server, client, documents)
+	registerAll(server, client, documents, team)
 
 	// One process, one transport: stdio when launched as a client's subprocess,
 	// HTTP when it needs to be reachable over the network.
@@ -172,7 +220,15 @@ func main() {
 
 	var runErr error
 	if *httpAddr != "" {
-		runErr = serveHTTP(ctx, server, *httpAddr)
+		if len(tokens) == 0 {
+			log.Printf("tedmcp: no tokens configured — the HTTP endpoint is open to anyone who can reach it")
+		} else {
+			log.Printf("tedmcp: bearer tokens required (%d configured)", len(tokens))
+		}
+		if p := team.Path(); p != "" {
+			log.Printf("tedmcp: team data in %s", p)
+		}
+		runErr = serveHTTP(ctx, mcpHandler(server, tokens), *httpAddr)
 	} else {
 		runErr = server.Run(ctx, &mcp.StdioTransport{})
 	}
@@ -184,10 +240,10 @@ func main() {
 
 // serveHTTP serves the MCP server over the streamable HTTP transport until the
 // context is cancelled.
-func serveHTTP(ctx context.Context, server *mcp.Server, addr string) error {
+func serveHTTP(ctx context.Context, handler http.Handler, addr string) error {
 	httpServer := &http.Server{
 		Addr:    addr,
-		Handler: mcpHandler(server),
+		Handler: handler,
 		// Streamable responses are long-lived, so only the header read is
 		// bounded; a read or write deadline would cut sessions short.
 		ReadHeaderTimeout: 20 * time.Second,
@@ -219,11 +275,18 @@ func serveHTTP(ctx context.Context, server *mcp.Server, addr string) error {
 // to have open cannot drive this server on their behalf. The SDK separately
 // rejects requests that arrive on localhost carrying a non-localhost Host
 // header, which is what stops DNS rebinding.
-func mcpHandler(server *mcp.Server) http.Handler {
-	streamable := mcp.NewStreamableHTTPHandler(
+//
+// With tokens configured, the MCP endpoint also requires a bearer token; the
+// health check and the source offer stay open, since a probe and the AGPL
+// notice must not need credentials.
+func mcpHandler(server *mcp.Server, tokens tokenSet) http.Handler {
+	var streamable http.Handler = mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
 		nil,
 	)
+	if len(tokens) > 0 {
+		streamable = auth.RequireBearerToken(tokens.verifier(), nil)(streamable)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle(mcpPath, http.NewCrossOriginProtection().Handler(streamable))
@@ -240,4 +303,14 @@ func mcpHandler(server *mcp.Server) http.Handler {
 		fmt.Fprintf(w, "\nFree software under the GNU AGPL v3. Source: %s\n", sourceURL)
 	})
 	return mux
+}
+
+// registerAll wires every tool, prompt and resource onto the server.
+func registerAll(s *mcp.Server, tc *ted.Client, wc *webdoc.Client, st *store.Store) {
+	registerTools(s, tc, wc, st)
+	registerRequirementTools(s, tc, wc)
+	registerHistoryTools(s, tc)
+	registerAwardTools(s, tc)
+	registerTeamTools(s, tc, st)
+	registerPrompts(s)
 }

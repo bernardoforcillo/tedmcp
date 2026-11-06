@@ -72,7 +72,7 @@ image:
 
 ## up: run the container, publishing HTTP on the loopback interface only
 up:
-	docker run --rm -p 127.0.0.1:8080:8080 -v $(IMAGE)-cache:/var/cache/tedmcp $(IMAGE)
+	docker run --rm -p 127.0.0.1:8080:8080 -v $(IMAGE)-cache:/var/cache/tedmcp -v $(IMAGE)-data:/var/lib/tedmcp $(IMAGE)
 
 ## cache-clean: drop the cached notice documents
 cache-clean:

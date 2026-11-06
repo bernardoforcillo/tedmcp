@@ -283,7 +283,7 @@ func TestFetchTenderDocumentsNeedsATarget(t *testing.T) {
 
 func scanDocuments(t *testing.T, in ScanDocsInput) ScanDocsOutput {
 	t.Helper()
-	handler := handleScanDocuments(ted.NewClient(), webdoc.NewClient("tedmcp-test/0.1"))
+	handler := handleScanDocuments(ted.NewClient(), webdoc.NewClient("tedmcp-test/0.1"), nil)
 	res, out, err := handler(context.Background(), nil, in)
 	if err != nil {
 		t.Fatalf("handler returned an error: %v", err)
@@ -416,7 +416,7 @@ func TestScanTenderDocumentsReportsDocumentsItNeverDownloaded(t *testing.T) {
 }
 
 func TestScanTenderDocumentsNeedsATarget(t *testing.T) {
-	handler := handleScanDocuments(ted.NewClient(), webdoc.NewClient("tedmcp-test/0.1"))
+	handler := handleScanDocuments(ted.NewClient(), webdoc.NewClient("tedmcp-test/0.1"), nil)
 	res, _, err := handler(context.Background(), nil, ScanDocsInput{Terms: []string{"x"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

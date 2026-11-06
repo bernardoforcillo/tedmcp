@@ -7,6 +7,7 @@ import (
 
 	"github.com/bernardoforcillo/tedmcp/internal/doctext"
 	"github.com/bernardoforcillo/tedmcp/internal/match"
+	"github.com/bernardoforcillo/tedmcp/internal/store"
 	"github.com/bernardoforcillo/tedmcp/internal/ted"
 	"github.com/bernardoforcillo/tedmcp/internal/webdoc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -37,6 +38,7 @@ type ScanDocsInput struct {
 	TermsByLanguage map[string][]string `json:"terms_by_language,omitempty" jsonschema:"terms keyed by the language they belong to (ISO 639-2/T, e.g. ITA, DEU; * means any language). Each tender's documents are matched only against the terms of the language its notice declares, which is what stops one language's word stem from colliding with another's ordinary vocabulary"`
 	Near            *match.Near         `json:"near,omitempty" jsonschema:"match two groups of roots appearing close together, for requirements written compositionally rather than as a set phrase. Keyed by language like terms_by_language"`
 	Regex           string              `json:"regex,omitempty" jsonschema:"regular expression to match instead of terms (RE2 syntax, case-insensitive unless it sets its own flags)"`
+	TermPack        string              `json:"term_pack,omitempty" jsonschema:"name of a saved term pack (see list_term_packs) whose terms are added to terms_by_language and near"`
 
 	PublicationNumbers []string `json:"publication_numbers,omitempty" jsonschema:"tenders whose documents should be searched, e.g. [\"442511-2026\"]. Their notices supply both the document links and the language to match in"`
 	URLs               []string `json:"urls,omitempty" jsonschema:"search documents at these URLs instead, when they are not reached from a notice. A procedure page works as well as a direct file link"`
@@ -88,8 +90,11 @@ type ScanDocsOutput struct {
 	Note    string           `json:"note,omitempty"`
 }
 
-func handleScanDocuments(tc *ted.Client, wc *webdoc.Client) func(context.Context, *mcp.CallToolRequest, ScanDocsInput) (*mcp.CallToolResult, ScanDocsOutput, error) {
+func handleScanDocuments(tc *ted.Client, wc *webdoc.Client, st *store.Store) func(context.Context, *mcp.CallToolRequest, ScanDocsInput) (*mcp.CallToolResult, ScanDocsOutput, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ScanDocsInput) (*mcp.CallToolResult, ScanDocsOutput, error) {
+		if err := applyTermPack(st, in.TermPack, &in.TermsByLanguage, &in.Near); err != nil {
+			return errorResult(err), ScanDocsOutput{}, nil
+		}
 		matcher, err := buildMatcher(in.Terms, in.TermsByLanguage, in.Near, in.Regex)
 		if err != nil {
 			return errorResult(err), ScanDocsOutput{}, nil
