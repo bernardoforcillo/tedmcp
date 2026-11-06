@@ -57,10 +57,20 @@ type DocumentLink struct {
 // which link leads where. All of it comes from the same XML already fetched to
 // read the award criteria, so assembling it costs no extra request.
 type Dossier struct {
-	InternalID    string         `json:"internal_id,omitempty" jsonschema:"the buyer's own reference for the procedure, e.g. G00749"`
-	ProcedureType string         `json:"procedure_type,omitempty" jsonschema:"open, restricted, negotiated…"`
-	DeadlineDate  string         `json:"deadline_date,omitempty"`
-	DeadlineTime  string         `json:"deadline_time,omitempty"`
+	InternalID    string `json:"internal_id,omitempty" jsonschema:"the buyer's own reference for the procedure, e.g. G00749"`
+	ProcedureType string `json:"procedure_type,omitempty" jsonschema:"open, restricted, negotiated…"`
+	DeadlineDate  string `json:"deadline_date,omitempty"`
+	DeadlineTime  string `json:"deadline_time,omitempty"`
+	// DeadlineZone is the UTC offset the deadline is stated in (+02:00), kept
+	// apart so a calendar entry lands at the right instant for everyone.
+	DeadlineZone string `json:"deadline_zone,omitempty"`
+	// QuestionsDeadline is when requests for clarification close — usually a
+	// week or more before the submission deadline, and the one teams miss.
+	QuestionsDate string         `json:"questions_deadline_date,omitempty" jsonschema:"last day to send the buyer questions (richieste di chiarimento)"`
+	QuestionsTime string         `json:"questions_deadline_time,omitempty"`
+	OpeningDate   string         `json:"opening_date,omitempty" jsonschema:"when tenders are opened, often in a public session"`
+	OpeningTime   string         `json:"opening_time,omitempty"`
+	ProcedureID   string         `json:"procedure_id,omitempty" jsonschema:"the eForms procedure identifier, shared by every notice of this procurement (contract notice, changes, award)"`
 	Buyer         *Organization  `json:"buyer,omitempty"`
 	Organizations []Organization `json:"organizations,omitempty"`
 	Lots          []Lot          `json:"lots,omitempty"`
@@ -81,7 +91,10 @@ func ParseDossier(data []byte) (*Dossier, error) {
 		ProcedureType: clean(root.Process.ProcedureCode),
 		DeadlineDate:  trimDate(clean(root.Process.Deadline.EndDate)),
 		DeadlineTime:  trimTime(clean(root.Process.Deadline.EndTime)),
+		DeadlineZone:  zoneOf(clean(root.Process.Deadline.EndTime)),
+		ProcedureID:   clean(root.ContractFolderID),
 	}
+	d.setProcessDates(root.Process)
 
 	// Organisations are declared once and referred to by ID from the places
 	// that give them a role, so collect them first and label them after.
@@ -140,7 +153,9 @@ func ParseDossier(data []byte) (*Dossier, error) {
 		d.Lots = append(d.Lots, lot)
 		if d.DeadlineDate == "" {
 			d.DeadlineDate, d.DeadlineTime = lot.DeadlineDate, lot.DeadlineTime
+			d.DeadlineZone = zoneOf(clean(l.Process.Deadline.EndTime))
 		}
+		d.setProcessDates(l.Process)
 		// The reference attached to the tender documents is the one printed on
 		// the buyer's portal (G00749); the folder ID is often a bare UUID that
 		// means nothing to anyone looking the procedure up.
@@ -242,6 +257,7 @@ type xmlOrganization struct {
 		CompanyID  string `xml:"PartyLegalEntity>CompanyID"`
 		Phone      string `xml:"Contact>Telephone"`
 		Email      string `xml:"Contact>ElectronicMail"`
+		Size       string `xml:"CompanySizeCode"`
 	} `xml:"Company"`
 }
 
@@ -251,6 +267,42 @@ type xmlProcess struct {
 		EndDate string `xml:"EndDate"`
 		EndTime string `xml:"EndTime"`
 	} `xml:"TenderSubmissionDeadlinePeriod"`
+	Questions struct {
+		EndDate string `xml:"EndDate"`
+		EndTime string `xml:"EndTime"`
+	} `xml:"AdditionalInformationRequestPeriod"`
+	Opening struct {
+		Date string `xml:"OccurrenceDate"`
+		Time string `xml:"OccurrenceTime"`
+	} `xml:"OpenTenderEvent"`
+}
+
+// setProcessDates fills the clarification and opening dates from the first
+// process block that states them.
+func (d *Dossier) setProcessDates(p xmlProcess) {
+	if d.QuestionsDate == "" {
+		d.QuestionsDate = trimDate(clean(p.Questions.EndDate))
+		d.QuestionsTime = trimTime(clean(p.Questions.EndTime))
+	}
+	if d.OpeningDate == "" {
+		d.OpeningDate = trimDate(clean(p.Opening.Date))
+		d.OpeningTime = trimTime(clean(p.Opening.Time))
+	}
+}
+
+// zoneOf returns the UTC offset of an eForms time like "08:00:00+02:00", or
+// "Z" for UTC, or "" when the time carries none.
+func zoneOf(s string) string {
+	if strings.HasSuffix(s, "Z") {
+		return "Z"
+	}
+	if len(s) >= 6 {
+		tail := s[len(s)-6:]
+		if (tail[0] == '+' || tail[0] == '-') && tail[3] == ':' {
+			return tail
+		}
+	}
+	return ""
 }
 
 type xmlTerms struct {
